@@ -9,6 +9,8 @@ export { PluginLoader } from "./plugins/loader";
 export type { PluginAPI, PluginFactory } from "./plugins/loader";
 export { loadConfig } from "./config";
 export type { OpensessionsConfig } from "./config";
+export { resolveTheme, BUILTIN_THEMES, DEFAULT_THEME } from "./themes";
+export type { Theme, ThemePalette, PartialTheme } from "./themes";
 export { startServer } from "./server/index";
 export { ensureServer } from "./server/launcher";
 export {

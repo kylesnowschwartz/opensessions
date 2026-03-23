@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
+import type { PartialTheme } from "./themes";
+
 export interface OpensessionsConfig {
   /** Explicit mux provider name (overrides auto-detect) */
   mux?: string;
@@ -8,6 +10,8 @@ export interface OpensessionsConfig {
   port?: number;
   /** Community plugin package names to load (e.g. ["opensessions-mux-zellij"]) */
   plugins: string[];
+  /** Theme: builtin name (e.g. "catppuccin-latte") or partial inline theme object */
+  theme?: string | PartialTheme;
 }
 
 const DEFAULTS: OpensessionsConfig = {
