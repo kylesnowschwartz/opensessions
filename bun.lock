@@ -14,6 +14,7 @@
       "name": "@opensessions/core",
       "version": "0.1.0",
       "devDependencies": {
+        "@opensessions/tmux": "workspace:*",
         "@types/bun": "latest",
         "typescript": "^5",
       },

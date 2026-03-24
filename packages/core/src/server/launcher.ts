@@ -39,6 +39,7 @@ export async function ensureServer(): Promise<void> {
   const serverPath = resolveServerEntryPath();
   const proc = Bun.spawn([process.execPath, "run", serverPath], {
     stdio: ["ignore", "ignore", "ignore"],
+    env: { ...process.env },
   });
   proc.unref();
 

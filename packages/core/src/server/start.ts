@@ -1,19 +1,14 @@
 import { startServer } from "./index";
 import { PluginLoader } from "../plugins/loader";
+import { TmuxProvider } from "@opensessions/tmux";
 import { loadConfig } from "../config";
 import { join } from "path";
 
 const config = loadConfig();
 const loader = new PluginLoader();
 
-// 1. Load the tmux plugin (built-in mux provider, lives outside core)
-try {
-  const tmuxPlugin = require("@opensessions/tmux");
-  const factory = typeof tmuxPlugin.default === "function" ? tmuxPlugin.default : tmuxPlugin;
-  factory({ registerMux: (p: any) => loader.registerMux(p), serverPort: 7391, serverHost: "127.0.0.1" });
-} catch {
-  // tmux plugin not installed — other mux plugins may provide coverage
-}
+// 1. Register TmuxProvider
+loader.registerMux(new TmuxProvider());
 
 // 2. Load local plugins from ~/.config/opensessions/plugins/
 const home = process.env.HOME ?? process.env.USERPROFILE ?? "";

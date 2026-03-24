@@ -388,13 +388,7 @@ export function startServer(mux: MuxProvider): void {
       close(ws) {
         ws.unsubscribe("sidebar");
         clientCount--;
-        if (clientCount <= 0) {
-          clientCount = 0;
-          idleTimer = setTimeout(() => {
-            cleanup();
-            process.exit(0);
-          }, SERVER_IDLE_TIMEOUT_MS);
-        }
+        if (clientCount < 0) clientCount = 0;
       },
       message(ws, msg) {
         try {

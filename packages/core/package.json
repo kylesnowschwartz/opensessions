@@ -9,6 +9,7 @@
     "build": "bun run build.ts"
   },
   "devDependencies": {
+    "@opensessions/tmux": "workspace:*",
     "@types/bun": "latest",
     "typescript": "^5"
   }
