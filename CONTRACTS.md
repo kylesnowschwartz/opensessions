@@ -1,30 +1,65 @@
 # CONTRACTS.md — Agent Integration Guide
 
-opensessions uses a simple HTTP contract. Any coding agent can report its status by POSTing to the server.
+opensessions detects agent status automatically using built-in **AgentWatcher** providers that watch each agent's data files directly. No configuration or hooks are needed for supported agents.
+
+## Built-in Agent Watchers
+
+opensessions ships with watchers for three agents. Each watcher monitors the agent's native data files, detects status changes, and maps them to mux sessions via the project directory.
+
+### Amp (`AmpAgentWatcher`)
+
+- **Watches:** `~/.local/share/amp/threads/T-*.json` for thread state changes
+- **Also watches:** `~/.local/share/amp/session.json` for thread-level "seen" state (clears `unseen` when the user focuses a terminal thread)
+- **Detection:** Uses `fs.watch` + polling (2s). Skips threads not modified in the last 5 minutes.
+- **Status mapping:** Derived from the last message's `role` and `state` (streaming → `running`, cancelled → `interrupted`, end_turn → `done`, tool_use → `running`)
+- **Session resolution:** Reads `env.initial.trees[0].uri` from the thread file to get the project directory
+
+### Claude Code (`ClaudeCodeAgentWatcher`)
+
+- **Watches:** `~/.claude/projects/<encoded-path>/*.jsonl` for JSONL journal changes
+- **Encoded path format:** `/Users/foo/myproject` → `-Users-foo-myproject`
+- **Detection:** Uses `fs.watch` on each project directory + polling (2s). Reads only new bytes appended since last check.
+- **Status mapping:** Derived from the last journal entry's `message.role` and content (assistant with `tool_use` → `running`, assistant without → `waiting`, user → `running`)
+- **Session resolution:** Decoded from the directory name
+
+### OpenCode (`OpenCodeAgentWatcher`)
+
+- **Watches:** `~/.local/share/opencode/opencode.db` SQLite database (or `$OPENCODE_DB_PATH`)
+- **Detection:** Polls every 3s using `bun:sqlite` in read-only mode. Queries `session` and `message` tables.
+- **Status mapping:** Derived from the last message's `role` and `finish` field (assistant with `tool-calls` → `running`, assistant without → `waiting`, user → `running`)
+- **Session resolution:** Reads `directory` field from the session row
+
+---
 
 ## Agent Event Contract
 
-**Endpoint:** `POST http://127.0.0.1:7391/event`
+All watchers emit `AgentEvent` objects through the `AgentWatcherContext`:
 
-**Payload:**
-
-```json
-{
-  "agent": "your-agent-name",
-  "session": "tmux-session-name",
-  "status": "running",
-  "ts": 1700000000000
+```typescript
+interface AgentEvent {
+  agent: string;
+  session: string;
+  status: AgentStatus;
+  ts: number;
+  threadId?: string;
+  threadName?: string;
+  unseen?: boolean;
 }
+
+type AgentStatus = "idle" | "running" | "done" | "error" | "waiting" | "interrupted";
 ```
 
 **Fields:**
 
-| Field     | Type   | Description                              |
-|-----------|--------|------------------------------------------|
-| `agent`   | string | Agent identifier (e.g. "amp", "claude-code", "aider") |
-| `session` | string | Terminal multiplexer session name         |
-| `status`  | string | One of: `running`, `idle`, `done`, `error`, `waiting`, `interrupted` |
-| `ts`      | number | Unix timestamp in milliseconds           |
+| Field        | Type    | Required | Description                              |
+|--------------|---------|----------|------------------------------------------|
+| `agent`      | string  | yes      | Agent identifier (e.g. `"amp"`, `"claude-code"`, `"opencode"`) |
+| `session`    | string  | yes      | Terminal multiplexer session name         |
+| `status`     | string  | yes      | One of: `running`, `idle`, `done`, `error`, `waiting`, `interrupted` |
+| `ts`         | number  | yes      | Unix timestamp in milliseconds           |
+| `threadId`   | string  | no       | Agent-specific thread/session identifier  |
+| `threadName` | string  | no       | Human-readable thread name or first prompt |
+| `unseen`     | boolean | no       | Set by tracker when serializing for the TUI — `true` if user hasn't seen this terminal state |
 
 **Status meanings:**
 
@@ -39,125 +74,49 @@ opensessions uses a simple HTTP contract. Any coding agent can report its status
 
 ---
 
-## Integration Examples
+## AgentWatcher Interface
 
-### Amp (Plugin API)
-
-Amp uses its plugin system. Install the sidebar-status plugin:
+To add support for a new agent, implement the `AgentWatcher` interface and register it via `PluginAPI.registerWatcher()`:
 
 ```typescript
-// ~/.config/amp/plugins/sidebar-status.ts
-import type Amp from "@anthropic-ai/amp";
+import type { AgentWatcher, AgentWatcherContext } from "@opensessions/core";
 
-const SESSION = process.env.TMUX
-  ? Bun.spawnSync(["tmux", "display-message", "-p", "#{session_name}"], {
-      stdout: "pipe",
-    }).stdout.toString().trim()
-  : "";
+export class MyAgentWatcher implements AgentWatcher {
+  readonly name = "my-agent";
 
-function post(status: string) {
-  if (!SESSION) return;
-  fetch("http://127.0.0.1:7391/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent: "amp", session: SESSION, status, ts: Date.now() }),
-  }).catch(() => {});
-}
+  start(ctx: AgentWatcherContext): void {
+    // Start watching data files, polling databases, etc.
+    // Use ctx.resolveSession(projectDir) to map a project directory to a mux session name.
+    // Use ctx.emit(event) to emit AgentEvent objects when status changes.
+  }
 
-export default function plugin(amp: Amp) {
-  amp.on("agent.start", () => post("running"));
-  amp.on("agent.end", (ev) => post(ev.error ? "error" : "done"));
-  amp.on("tool.call", () => post("running"));
-}
-```
-
-### Claude Code (Hooks)
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "type": "command",
-        "command": "curl -s -o /dev/null -X POST http://127.0.0.1:7391/event -H 'Content-Type: application/json' -d '{\"agent\":\"claude-code\",\"session\":\"'$(tmux display-message -p '#{session_name}')'\",\"status\":\"running\",\"ts\":'$(date +%s000)'}'"
-      }
-    ],
-    "Stop": [
-      {
-        "type": "command",
-        "command": "curl -s -o /dev/null -X POST http://127.0.0.1:7391/event -H 'Content-Type: application/json' -d '{\"agent\":\"claude-code\",\"session\":\"'$(tmux display-message -p '#{session_name}')'\",\"status\":\"idle\",\"ts\":'$(date +%s000)'}'"
-      }
-    ],
-    "PostToolUse": [
-      {
-        "type": "command",
-        "command": "curl -s -o /dev/null -X POST http://127.0.0.1:7391/event -H 'Content-Type: application/json' -d '{\"agent\":\"claude-code\",\"session\":\"'$(tmux display-message -p '#{session_name}')'\",\"status\":\"running\",\"ts\":'$(date +%s000)'}'"
-      }
-    ],
-    "Notification": [
-      {
-        "type": "command",
-        "command": "curl -s -o /dev/null -X POST http://127.0.0.1:7391/event -H 'Content-Type: application/json' -d '{\"agent\":\"claude-code\",\"session\":\"'$(tmux display-message -p '#{session_name}')'\",\"status\":\"waiting\",\"ts\":'$(date +%s000)'}'"
-      }
-    ]
+  stop(): void {
+    // Clean up watchers, timers, and other resources.
   }
 }
 ```
 
-### OpenCode (Plugin)
-
-OpenCode emits session events. Add a plugin that maps them:
+**`AgentWatcherContext`** provided to `start()`:
 
 ```typescript
-// opencode-opensessions.ts
-const SESSION = process.env.TMUX
-  ? Bun.spawnSync(["tmux", "display-message", "-p", "#{session_name}"], {
-      stdout: "pipe",
-    }).stdout.toString().trim()
-  : "";
-
-function post(status: string) {
-  if (!SESSION) return;
-  fetch("http://127.0.0.1:7391/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent: "opencode", session: SESSION, status, ts: Date.now() }),
-  }).catch(() => {});
+interface AgentWatcherContext {
+  /** Resolve a project directory path to a mux session name, or null if unmatched */
+  resolveSession(projectDir: string): string | null;
+  /** Emit an agent event (applied to tracker + broadcast automatically) */
+  emit(event: AgentEvent): void;
 }
-
-// Map OpenCode events → opensessions statuses
-// session.idle   → idle
-// session.status → running
-// session.error  → error
 ```
 
-### Aider / Any Agent (Generic curl)
+**Registration:**
 
-For any agent that supports shell hooks or custom commands:
+```typescript
+import { PluginAPI } from "@opensessions/core";
 
-```bash
-# Report agent started working
-curl -s -o /dev/null -X POST http://127.0.0.1:7391/event \
-  -H 'Content-Type: application/json' \
-  -d '{"agent":"aider","session":"'"$(tmux display-message -p '#{session_name}')"'","status":"running","ts":'"$(date +%s000)"'}'
-
-# Report agent finished
-curl -s -o /dev/null -X POST http://127.0.0.1:7391/event \
-  -H 'Content-Type: application/json' \
-  -d '{"agent":"aider","session":"'"$(tmux display-message -p '#{session_name}')"'","status":"done","ts":'"$(date +%s000)"'}'
+// In a plugin:
+pluginAPI.registerWatcher(new MyAgentWatcher());
 ```
 
-### JSONL File Fallback
-
-If the HTTP endpoint is unreachable, agents can append events to `/tmp/opensessions-events.jsonl`:
-
-```bash
-echo '{"agent":"my-agent","session":"my-session","status":"running","ts":'$(date +%s000)'}' >> /tmp/opensessions-events.jsonl
-```
-
-The server reads this file as a fallback.
+The built-in watchers (Amp, Claude Code, OpenCode) are registered automatically in `start.ts`. Custom watchers should be registered via the plugin API.
 
 ---
 

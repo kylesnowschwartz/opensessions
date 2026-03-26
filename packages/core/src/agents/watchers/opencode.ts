@@ -36,6 +36,7 @@ interface PartData {
 }
 
 const POLL_MS = 3000;
+const STALE_MS = 5 * 60 * 1000;
 
 // --- Status detection ---
 
@@ -70,9 +71,11 @@ export class OpenCodeAgentWatcher implements AgentWatcher {
       ?? join(homedir(), ".local", "share", "opencode", "opencode.db");
   }
 
+  private polling = false;
+
   start(ctx: AgentWatcherContext): void {
     this.ctx = ctx;
-    this.poll();
+    setTimeout(() => this.poll(), 50);
     this.pollTimer = setInterval(() => this.poll(), POLL_MS);
   }
 
@@ -96,66 +99,89 @@ export class OpenCodeAgentWatcher implements AgentWatcher {
     }
   }
 
+  private seeded = false;
+
   private poll(): void {
-    if (!this.ctx) return;
-    if (!this.openDb()) return;
+    if (!this.ctx || this.polling) return;
+    this.polling = true;
 
-    let sessions: SessionRow[];
     try {
-      sessions = this.db.query(
-        `SELECT id, title, directory, time_updated FROM session ORDER BY time_updated DESC`,
-      ).all();
-    } catch {
-      try { this.db.close(); } catch {}
-      this.db = null;
-      return;
-    }
+      if (!this.openDb()) return;
 
-    for (const row of sessions) {
-      const prev = this.sessionTimestamps.get(row.id);
-      if (prev === row.time_updated) continue;
-      this.sessionTimestamps.set(row.id, row.time_updated);
-
-      let lastMsg: MessageRow | null = null;
-      let lastParts: PartData[] = [];
+      let sessions: SessionRow[];
+      const staleThreshold = Math.floor((Date.now() - STALE_MS) / 1000);
       try {
-        lastMsg = this.db.query(
-          `SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 1`,
-        ).get(row.id);
-
-        if (lastMsg) {
-          const partRows: { data: string }[] = this.db.query(
-            `SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC`,
-          ).all(lastMsg.id);
-          for (const pr of partRows) {
-            try { lastParts.push(JSON.parse(pr.data)); } catch {}
-          }
-        }
+        sessions = this.db.query(
+          `SELECT id, title, directory, time_updated FROM session WHERE time_updated > ? ORDER BY time_updated DESC`,
+        ).all(staleThreshold);
       } catch {
-        continue;
+        try { this.db.close(); } catch {}
+        this.db = null;
+        return;
       }
 
-      let lastMsgData: MessageData | null = null;
-      if (lastMsg) {
-        try { lastMsgData = JSON.parse(lastMsg.data); } catch {}
+      // First poll: just record timestamps, don't emit — we can't know if
+      // OpenCode is actually running from historical DB state alone.
+      if (!this.seeded) {
+        for (const row of sessions) {
+          this.sessionTimestamps.set(row.id, row.time_updated);
+        }
+        this.seeded = true;
+        return;
       }
 
-      const status = determineStatus(lastMsgData, lastParts);
-      const prevStatus = this.sessionStatuses.get(row.id);
-      if (prevStatus === status) continue;
-      this.sessionStatuses.set(row.id, status);
+      for (const row of sessions) {
+        const prev = this.sessionTimestamps.get(row.id);
+        if (prev === row.time_updated) continue;
+        this.sessionTimestamps.set(row.id, row.time_updated);
 
-      const session = this.ctx.resolveSession(row.directory);
-      if (!session) continue;
+        // Only emit if we had a previous timestamp — a change means
+        // OpenCode is actively writing to this session right now.
+        if (prev === undefined) continue;
 
-      this.ctx.emit({
-        agent: "opencode",
-        session,
-        status,
-        ts: Date.now(),
-        threadId: row.id,
-        ...(row.title && { threadName: row.title }),
-      });
+        let lastMsg: MessageRow | null = null;
+        let lastParts: PartData[] = [];
+        try {
+          lastMsg = this.db.query(
+            `SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 1`,
+          ).get(row.id);
+
+          if (lastMsg) {
+            const partRows: { data: string }[] = this.db.query(
+              `SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC`,
+            ).all(lastMsg.id);
+            for (const pr of partRows) {
+              try { lastParts.push(JSON.parse(pr.data)); } catch {}
+            }
+          }
+        } catch {
+          continue;
+        }
+
+        let lastMsgData: MessageData | null = null;
+        if (lastMsg) {
+          try { lastMsgData = JSON.parse(lastMsg.data); } catch {}
+        }
+
+        const status = determineStatus(lastMsgData, lastParts);
+        const prevStatus = this.sessionStatuses.get(row.id);
+        if (prevStatus === status) continue;
+        this.sessionStatuses.set(row.id, status);
+
+        const session = this.ctx.resolveSession(row.directory);
+        if (!session) continue;
+
+        this.ctx.emit({
+          agent: "opencode",
+          session,
+          status,
+          ts: Date.now(),
+          threadId: row.id,
+          ...(row.title && { threadName: row.title }),
+        });
+      }
+    } finally {
+      this.polling = false;
     }
   }
 }

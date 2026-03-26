@@ -150,19 +150,17 @@ function App() {
     send({ type: "set-theme", theme: themeName });
   }
 
-  function spawnSessionizer() {
-    if (muxCtx.type !== "tmux") return; // Only works in tmux for now
-    renderer.destroy();
-    const proc = Bun.spawnSync(["/usr/local/bin/tmux-sessionizer"], {
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    // Re-launch TUI after sessionizer exits
-    render(() => <App />, {
-      exitOnCtrlC: true,
-      targetFPS: 30,
-      useMouse: true,
+  function createNewSession() {
+    if (muxCtx.type !== "tmux") {
+      send({ type: "new-session" });
+      return;
+    }
+    const scriptPath = new URL("../scripts/sessionizer.sh", import.meta.url).pathname;
+    muxCtx.sdk.displayPopup({
+      command: `bash "${scriptPath}"`,
+      title: " new session ",
+      width: "60%",
+      height: "60%",
     });
   }
 
@@ -340,7 +338,7 @@ function App() {
       }
       case "n":
       case "c":
-        spawnSessionizer();
+        createNewSession();
         break;
       default: {
         if (key.number) {
@@ -386,7 +384,7 @@ function App() {
       </box>
 
       {/* Session list */}
-      <scrollbox flexGrow={1} paddingTop={1}>
+      <scrollbox flexGrow={1} flexShrink={1} paddingTop={1}>
         <For each={sessions}>
           {(session, i) => (
             <SessionCard
@@ -407,10 +405,12 @@ function App() {
         </For>
       </scrollbox>
 
-      {/* Detail panel — focused session info */}
+      {/* Detail panel — focused session info, fixed height */}
       <Show when={focusedData()}>
         {(data) => (
-          <DetailPanel session={data()} theme={theme} statusColors={S} spinIdx={spinIdx} />
+          <scrollbox maxHeight={10} flexShrink={0}>
+            <DetailPanel session={data()} theme={theme} statusColors={S} spinIdx={spinIdx} />
+          </scrollbox>
         )}
       </Show>
 
@@ -567,9 +567,6 @@ function DetailPanel(props: DetailPanelProps) {
   const agents = () => props.session.agents ?? [];
   const hasAgents = () => agents().length > 0;
 
-  const sparkline = () => buildSparkline(props.session.eventTimestamps ?? [], 20);
-  const hasActivity = () => (props.session.eventTimestamps ?? []).length >= 3;
-
   const truncDir = () => {
     const d = props.session.dir;
     if (!d) return "";
@@ -578,12 +575,7 @@ function DetailPanel(props: DetailPanelProps) {
     return short.length > 24 ? "…" + short.slice(short.length - 23) : short;
   };
 
-  const truncThread = (name?: string) => {
-    if (!name) return "";
-    return name.length > 24 ? name.slice(0, 23) + "…" : name;
-  };
-
-  const statusLabel = (status: string): string => {
+  const statusText = (status: string): string => {
     if (status === "running") return "running";
     if (status === "done") return "done";
     if (status === "error") return "error";
@@ -598,49 +590,72 @@ function DetailPanel(props: DetailPanelProps) {
 
       {/* Directory */}
       <text truncate>
-        <span style={{ fg: P().overlay0, attributes: DIM }}>{"  "}{truncDir()}</span>
+        <span style={{ fg: P().overlay0, attributes: DIM }}>{truncDir()}</span>
       </text>
 
-      {/* Agent instances — two lines per agent for clarity */}
-      <Show when={hasAgents()}>
+      {/* Listening ports */}
+      <Show when={props.session.ports?.length}>
         <box height={1} />
+        <For each={props.session.ports}>
+          {(port) => (
+            <text truncate onMouseDown={() => {
+              Bun.spawn(["open", `http://localhost:${port}`], { stdout: "ignore", stderr: "ignore" });
+            }}>
+              <span style={{ fg: P().sky }}>{"⌁ "}</span>
+              <span style={{ fg: P().subtext0 }}>{"localhost:"}</span>
+              <span style={{ fg: P().text }}>{String(port)}</span>
+            </text>
+          )}
+        </For>
+      </Show>
+
+      {/* Agent instances */}
+      <Show when={hasAgents()}>
         <For each={agents()}>
-          {(agent) => {
+          {(agent, i) => {
+            const isTerminal = () => ["done", "error", "interrupted"].includes(agent.status);
+            const isUnseen = () => isTerminal() && agent.unseen === true;
             const icon = () => {
+              if (isUnseen()) return UNSEEN_ICON;
+              if (isTerminal()) return agent.status === "done" ? "✓" : agent.status === "error" ? "✗" : "⚠";
               if (agent.status === "running") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
-              if (agent.status === "error") return "✗";
-              if (agent.status === "done") return "✓";
-              if (agent.status === "interrupted") return "⚠";
               if (agent.status === "waiting") return "◉";
               return "○";
             };
-            const color = () => SC()[agent.status];
+            const color = () => {
+              if (isTerminal()) {
+                if (agent.status === "error") return P().red;
+                if (agent.status === "interrupted") return P().peach;
+                return isUnseen() ? P().teal : P().green;
+              }
+              return SC()[agent.status];
+            };
             return (
               <box flexDirection="column" flexShrink={0}>
-                {/* Line 1: icon + agent name + status label */}
-                <text truncate>
-                  <span style={{ fg: color() }}>{"  "}{icon()}</span>
-                  <span style={{ fg: P().subtext1 }}>{" "}{agent.agent}</span>
-                  <span style={{ fg: color(), attributes: DIM }}>{" "}{statusLabel(agent.status)}</span>
-                </text>
-                {/* Line 2: thread name, indented */}
-                {agent.threadName
-                  ? <text truncate>
-                      <span style={{ fg: P().overlay0, attributes: DIM }}>{"   "}{truncThread(agent.threadName)}</span>
+                {/* Spacer between agents, or before first */}
+                <box height={1} />
+                {/* Row: icon + name … status */}
+                <box flexDirection="row" paddingRight={1}>
+                  <text flexGrow={1} truncate>
+                    <span style={{ fg: color() }}>{icon()}</span>
+                    <span style={{ fg: P().subtext1 }}>{" "}{agent.agent}</span>
+                  </text>
+                  <Show when={!isTerminal() || !isUnseen()}>
+                    <text flexShrink={0}>
+                      <span style={{ fg: color(), attributes: DIM }}>{statusText(agent.status)}</span>
                     </text>
-                  : ""}
+                  </Show>
+                </box>
+                {/* Thread name — aligned with agent name */}
+                <Show when={agent.threadName}>
+                  <text paddingLeft={2} paddingRight={1}>
+                    <span style={{ fg: isUnseen() ? color() : P().overlay0 }}>{agent.threadName}</span>
+                  </text>
+                </Show>
               </box>
             );
           }}
         </For>
-      </Show>
-
-      {/* Sparkline — activity over last 30m */}
-      <Show when={hasActivity()}>
-        <box height={1} />
-        <text truncate>
-          <span style={{ fg: P().lavender, attributes: DIM }}>{"  "}{sparkline()}</span>
-        </text>
       </Show>
     </box>
   );

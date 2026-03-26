@@ -83,6 +83,83 @@ function invalidateGitCache(dir?: string) {
   else gitInfoCache.clear();
 }
 
+// --- Port detection ---
+
+const portCache = new Map<string, { ports: number[]; ts: number }>();
+const PORT_CACHE_TTL_MS = 5000;
+
+function getSessionPorts(sessionName: string): number[] {
+  const cached = portCache.get(sessionName);
+  if (cached && Date.now() - cached.ts < PORT_CACHE_TTL_MS) return cached.ports;
+
+  try {
+    // Get all pane PIDs for this session
+    const panePidResult = Bun.spawnSync(
+      ["tmux", "list-panes", "-s", "-t", sessionName, "-F", "#{pane_pid}"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const panePids = panePidResult.stdout.toString().trim().split("\n").filter(Boolean).map(Number);
+    if (panePids.length === 0) { portCache.set(sessionName, { ports: [], ts: Date.now() }); return []; }
+
+    // Get full descendant tree for all pane PIDs using a single ps call.
+    // ps -o pid=,ppid= gives us every process's parent — we BFS from pane PIDs.
+    const allPids = new Set<number>(panePids);
+    const childrenOf = new Map<number, number[]>();
+    const psResult = Bun.spawnSync(["ps", "-eo", "pid=,ppid="], { stdout: "pipe", stderr: "pipe" });
+    for (const line of psResult.stdout.toString().trim().split("\n")) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 2) continue;
+      const pid = parseInt(parts[0], 10);
+      const ppid = parseInt(parts[1], 10);
+      if (isNaN(pid) || isNaN(ppid)) continue;
+      let arr = childrenOf.get(ppid);
+      if (!arr) { arr = []; childrenOf.set(ppid, arr); }
+      arr.push(pid);
+    }
+    const queue = [...panePids];
+    while (queue.length > 0) {
+      const pid = queue.pop()!;
+      const kids = childrenOf.get(pid);
+      if (!kids) continue;
+      for (const kid of kids) {
+        if (!allPids.has(kid)) {
+          allPids.add(kid);
+          queue.push(kid);
+        }
+      }
+    }
+
+    // Get all listening TCP ports
+    const lsofResult = Bun.spawnSync(
+      ["lsof", "-iTCP", "-sTCP:LISTEN", "-nP", "-F", "pn"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const lsofOutput = lsofResult.stdout.toString();
+
+    // Parse lsof -F output: lines starting with 'p' = pid, 'n' = name (contains :port)
+    const ports = new Set<number>();
+    let currentPid = 0;
+    for (const line of lsofOutput.split("\n")) {
+      if (line.startsWith("p")) {
+        currentPid = parseInt(line.slice(1), 10);
+      } else if (line.startsWith("n") && allPids.has(currentPid)) {
+        const match = line.match(/:(\d+)$/);
+        if (match) {
+          const port = parseInt(match[1], 10);
+          if (!isNaN(port)) ports.add(port);
+        }
+      }
+    }
+
+    const result = [...ports].sort((a, b) => a - b);
+    portCache.set(sessionName, { ports: result, ts: Date.now() });
+    return result;
+  } catch {
+    portCache.set(sessionName, { ports: [], ts: Date.now() });
+    return [];
+  }
+}
+
 // --- Git HEAD file watchers ---
 
 const gitHeadWatchers = new Map<string, FSWatcher>();
@@ -171,22 +248,50 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     tracker.setActiveSessions([currentSession]);
   }
 
-  // --- Start agent watchers ---
+  // --- Agent watcher context ---
+
+  let watcherBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function debouncedBroadcast() {
+    if (watcherBroadcastTimer) return;
+    watcherBroadcastTimer = setTimeout(() => {
+      watcherBroadcastTimer = null;
+      broadcastState();
+    }, 200);
+  }
+
+  // Cache for dir→session resolution (rebuilt per scan cycle)
+  let dirSessionCache: Map<string, string> | null = null;
+  let dirSessionCacheTs = 0;
+  const DIR_CACHE_TTL = 5000;
+
+  function getDirSessionMap(): Map<string, string> {
+    const now = Date.now();
+    if (dirSessionCache && now - dirSessionCacheTs < DIR_CACHE_TTL) return dirSessionCache;
+    const map = new Map<string, string>();
+    for (const p of allProviders) {
+      for (const s of p.listSessions()) {
+        if (s.dir) map.set(s.dir, s.name);
+      }
+    }
+    dirSessionCache = map;
+    dirSessionCacheTs = now;
+    return map;
+  }
 
   const watcherCtx: AgentWatcherContext = {
     resolveSession(projectDir: string): string | null {
-      for (const p of allProviders) {
-        for (const s of p.listSessions()) {
-          if (!s.dir) continue;
-          if (s.dir === projectDir) return s.name;
-          if (projectDir.startsWith(s.dir + "/") || s.dir.startsWith(projectDir + "/")) return s.name;
-        }
+      const map = getDirSessionMap();
+      const direct = map.get(projectDir);
+      if (direct) return direct;
+      for (const [dir, name] of map) {
+        if (projectDir.startsWith(dir + "/") || dir.startsWith(projectDir + "/")) return name;
       }
       return null;
     },
     emit(event: AgentEvent) {
       tracker.applyEvent(event);
-      broadcastState();
+      debouncedBroadcast();
     },
   };
 
@@ -268,6 +373,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
         isWorktree: git.isWorktree,
         unseen: tracker.isUnseen(name),
         panes,
+        ports: getSessionPorts(name),
         windows,
         uptime,
         agentState: tracker.getState(name),
@@ -598,9 +704,36 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     }
   }
 
+  // --- Port polling (detect new/stopped listeners every 10s) ---
+
+  const PORT_POLL_INTERVAL_MS = 10_000;
+  let portPollTimer: ReturnType<typeof setInterval> | null = null;
+
+  function startPortPoll() {
+    portPollTimer = setInterval(() => {
+      if (!lastState || clientCount === 0) return;
+      // Snapshot current ports per session
+      const prev = new Map<string, string>();
+      for (const s of lastState.sessions) {
+        prev.set(s.name, (s.ports ?? []).join(","));
+      }
+      // Invalidate cache so getSessionPorts re-runs
+      portCache.clear();
+      // Recompute ports and check for changes
+      let changed = false;
+      for (const s of lastState.sessions) {
+        const fresh = getSessionPorts(s.name).join(",");
+        if (fresh !== (prev.get(s.name) ?? "")) { changed = true; break; }
+      }
+      if (changed) broadcastState();
+    }, PORT_POLL_INTERVAL_MS);
+  }
+
   function cleanup() {
     for (const w of allWatchers) w.stop();
+    if (watcherBroadcastTimer) clearTimeout(watcherBroadcastTimer);
     if (debounceTimer) clearTimeout(debounceTimer);
+    if (portPollTimer) clearInterval(portPollTimer);
     for (const watcher of gitHeadWatchers.values()) watcher.close();
     gitHeadWatchers.clear();
     if (idleTimer) clearTimeout(idleTimer);
@@ -709,6 +842,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
 
   for (const p of allProviders) p.setupHooks(SERVER_HOST, SERVER_PORT);
   broadcastState();
+  startPortPoll();
 
   // Start agent watchers after server is ready
   for (const w of allWatchers) {

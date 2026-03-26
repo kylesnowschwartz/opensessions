@@ -16,6 +16,7 @@ export interface SessionData {
   isWorktree: boolean;
   unseen: boolean;
   panes: number;
+  ports: number[];
   windows: number;
   uptime: string;
   agentState: AgentEvent | null;

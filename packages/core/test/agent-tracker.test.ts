@@ -50,12 +50,22 @@ describe("AgentTracker", () => {
     expect(tracker.getUnseen()).not.toContain("sess-1");
   });
 
-  test("applyEvent clears unseen when non-terminal status received", () => {
-    tracker.applyEvent(event({ session: "sess-1", status: "done" }));
+  test("applyEvent clears unseen when same instance transitions to non-terminal", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "done", threadId: "t1" }));
     expect(tracker.getUnseen()).toContain("sess-1");
 
-    tracker.applyEvent(event({ session: "sess-1", status: "running" }));
+    tracker.applyEvent(event({ session: "sess-1", status: "running", threadId: "t1" }));
     expect(tracker.getUnseen()).not.toContain("sess-1");
+  });
+
+  test("applyEvent: resuming thread A does NOT clear thread B unseen", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "done", threadId: "t1" }));
+    tracker.applyEvent(event({ session: "sess-1", status: "done", threadId: "t2" }));
+    expect(tracker.isUnseen("sess-1")).toBe(true);
+
+    // Thread A resumes (user interacted) — but thread B is still unseen
+    tracker.applyEvent(event({ session: "sess-1", status: "running", threadId: "t1" }));
+    expect(tracker.isUnseen("sess-1")).toBe(true); // thread B still unseen
   });
 
   // --- getState ---
@@ -66,14 +76,16 @@ describe("AgentTracker", () => {
 
   // --- markSeen ---
 
-  test("markSeen clears unseen flag and removes terminal state", () => {
+  test("markSeen clears unseen flag but keeps terminal instances", () => {
     tracker.applyEvent(event({ session: "sess-1", status: "done" }));
     expect(tracker.getUnseen()).toContain("sess-1");
 
     const cleared = tracker.markSeen("sess-1");
     expect(cleared).toBe(true);
     expect(tracker.getUnseen()).not.toContain("sess-1");
-    expect(tracker.getState("sess-1")).toBeNull();
+    // Instance still exists (seen terminal), pruneTerminal will clean it up
+    expect(tracker.getState("sess-1")).not.toBeNull();
+    expect(tracker.getState("sess-1")!.status).toBe("done");
   });
 
   test("markSeen returns false when session has no unseen", () => {
@@ -146,5 +158,44 @@ describe("AgentTracker", () => {
     // Now sess-2 is active; a terminal event shouldn't mark it unseen
     tracker.applyEvent(event({ session: "sess-2", status: "done" }));
     expect(tracker.isUnseen("sess-2")).toBe(false);
+  });
+
+  // --- getAgents unseen flag ---
+
+  test("getAgents stamps unseen flag on terminal instances", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "done", threadId: "t1" }));
+    const agents = tracker.getAgents("sess-1");
+    expect(agents.length).toBe(1);
+    expect(agents[0]!.unseen).toBe(true);
+  });
+
+  test("getAgents does not stamp unseen on seen terminal instances", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "done", threadId: "t1" }));
+    tracker.markSeen("sess-1");
+    const agents = tracker.getAgents("sess-1");
+    expect(agents.length).toBe(1);
+    expect(agents[0]!.unseen).toBeUndefined();
+  });
+
+  // --- pruneTerminal ---
+
+  test("pruneTerminal removes seen terminal instances after timeout", () => {
+    const oldTs = Date.now() - 6 * 60 * 1000; // 6 min ago, past TERMINAL_PRUNE_MS
+    tracker.applyEvent(event({ session: "sess-1", status: "done", ts: oldTs }));
+    tracker.markSeen("sess-1"); // Mark seen so pruneTerminal can remove it
+
+    tracker.pruneTerminal();
+
+    expect(tracker.getState("sess-1")).toBeNull();
+  });
+
+  test("pruneTerminal does NOT remove unseen terminal instances", () => {
+    const oldTs = Date.now() - 6 * 60 * 1000;
+    tracker.applyEvent(event({ session: "sess-1", status: "done", ts: oldTs }));
+    // NOT marked seen
+
+    tracker.pruneTerminal();
+
+    expect(tracker.getState("sess-1")).not.toBeNull();
   });
 });

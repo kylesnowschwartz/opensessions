@@ -15,7 +15,7 @@ Runs inside your terminal. Works with your existing shortcuts. No new app to lea
 - **Unseen badges** — know when an agent finishes in another session without checking
 - **Instant switching** — jump to any session by index, no fuzzy finder needed
 - **Zero config** — works out of the box with tmux + any terminal
-- **Agent-agnostic** — Amp, Claude Code, OpenCode, Aider, or any agent that can POST JSON
+- **Agent-agnostic** — built-in watchers for Amp, Claude Code, and OpenCode; plugin system for others
 - **Mux-agnostic** — tmux today, zellij and others via the `MuxProvider` interface
 
 ## Quick Start
@@ -37,19 +37,25 @@ cd packages/tui && bun run start
 
 | Package | Description |
 |---------|-------------|
-| [`@opensessions/core`](./packages/core) | Server, contracts, mux providers, agent tracker |
+| [`@opensessions/core`](./packages/core) | Server, contracts, agent watchers, agent tracker |
 | [`@opensessions/tui`](./packages/tui) | OpenTUI terminal sidebar (Solid) |
+| [`@opensessions/mux`](./packages/mux) | MuxProvider interface and detection |
+| [`@opensessions/mux-tmux`](./packages/mux-tmux) | tmux MuxProvider implementation |
+| [`@opensessions/mux-zellij`](./packages/mux-zellij) | Zellij MuxProvider implementation |
+| [`@opensessions/tmux-sdk`](./packages/tmux-sdk) | Low-level tmux command bindings |
 
 ## Architecture
 
 ```
-┌─────────────────┐     POST /event     ┌─────────────────┐
-│  Coding Agent   │ ──────────────────→  │   Server        │
-│  (Amp, Claude,  │                      │  (WebSocket)    │
-│   OpenCode...)  │                      │                 │
-└─────────────────┘                      │  AgentTracker   │
-                                         │  MuxProvider    │
-┌─────────────────┐     WebSocket        │  GitCache       │
+┌─────────────────┐                      ┌─────────────────┐
+│  Agent Data     │     file watchers    │   Server        │
+│                 │ ──────────────────→  │  (WebSocket)    │
+│  ~/.amp/threads │   AgentWatchers      │                 │
+│  ~/.claude/     │                      │  AgentTracker   │
+│  ~/.opencode/   │                      │  GitCache       │
+└─────────────────┘                      │                 │
+                                         │                 │
+┌─────────────────┐     WebSocket        │                 │
 │  TUI Client     │ ←──────────────────  │                 │
 │  (OpenTUI)      │                      └─────────────────┘
 └─────────────────┘           ↕
@@ -61,15 +67,9 @@ cd packages/tui && bun run start
 
 ## Agent Integration
 
-Any agent can report status by POSTing to the server — no code changes required.
+Built-in watchers automatically detect **Amp**, **Claude Code**, and **OpenCode** — zero config. Just start the TUI and agent activity is tracked by watching their data files (Amp threads, Claude JSONL, OpenCode SQLite).
 
-```bash
-curl -X POST http://127.0.0.1:7391/event \
-  -H 'Content-Type: application/json' \
-  -d '{"agent":"my-agent","session":"my-session","status":"running","ts":'$(date +%s000)'}'
-```
-
-Ready-to-use examples for **Amp**, **Claude Code**, **OpenCode**, and **Aider** in [CONTRACTS.md](./CONTRACTS.md).
+For other agents, implement the `AgentWatcher` interface. See [CONTRACTS.md](./CONTRACTS.md) for details.
 
 ## Plugins & Extending
 
@@ -94,16 +94,6 @@ npm plugins go in `~/.config/opensessions/config.json`:
 ```
 
 Full walkthrough: scaffold → test → publish in [PLUGINS.md](./PLUGINS.md).
-
-## Setup with Amp
-
-Copy the Amp plugin to report agent status to opensessions:
-
-```bash
-cp examples/amp-plugin.ts ~/.config/amp/plugins/opensessions.ts
-```
-
-See [PLUGINS.md](./PLUGINS.md#amp) for the full plugin source and setup for Claude Code, OpenCode, and Aider.
 
 ## Built with
 

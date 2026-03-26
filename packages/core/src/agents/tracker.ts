@@ -21,8 +21,13 @@ export class AgentTracker {
   // Outer key: session name, inner key: instance key (agent or agent:threadId)
   private instances = new Map<string, Map<string, AgentEvent>>();
   private eventTimestamps = new Map<string, number[]>();
-  private unseen = new Set<string>();
+  // Per-instance unseen tracking: "session\0instanceKey"
+  private unseenInstances = new Set<string>();
   private active = new Set<string>();
+
+  private unseenKey(session: string, key: string): string {
+    return `${session}\0${key}`;
+  }
 
   applyEvent(event: AgentEvent): void {
     const key = instanceKey(event);
@@ -46,13 +51,15 @@ export class AgentTracker {
       timestamps.splice(0, timestamps.length - MAX_EVENT_TIMESTAMPS);
     }
 
-    // Unseen tracking based on aggregate state
+    // Per-instance unseen tracking
+    const ukey = this.unseenKey(event.session, key);
     if (TERMINAL_STATUSES.has(event.status)) {
       if (!this.active.has(event.session)) {
-        this.unseen.add(event.session);
+        this.unseenInstances.add(ukey);
       }
     } else {
-      this.unseen.delete(event.session);
+      // Non-terminal status for this instance = user is interacting, mark seen
+      this.unseenInstances.delete(ukey);
     }
   }
 
@@ -73,11 +80,15 @@ export class AgentTracker {
     return best;
   }
 
-  /** Returns all agent instances for a session (including terminal states) */
+  /** Returns all agent instances for a session, with unseen flag stamped */
   getAgents(session: string): AgentEvent[] {
     const sessionInstances = this.instances.get(session);
     if (!sessionInstances) return [];
-    return [...sessionInstances.values()];
+    return [...sessionInstances.values()].map((event) => {
+      const key = instanceKey(event);
+      const isUnseen = this.unseenInstances.has(this.unseenKey(session, key));
+      return isUnseen ? { ...event, unseen: true } : event;
+    });
   }
 
   /** Returns recent event timestamps for sparkline rendering */
@@ -86,20 +97,18 @@ export class AgentTracker {
   }
 
   markSeen(session: string): boolean {
-    const cleared = this.unseen.delete(session);
-    if (cleared) {
-      // Only remove terminal instances, keep running/waiting ones
-      const sessionInstances = this.instances.get(session);
-      if (sessionInstances) {
-        for (const [key, event] of sessionInstances) {
-          if (TERMINAL_STATUSES.has(event.status)) {
-            sessionInstances.delete(key);
-          }
-        }
-        if (sessionInstances.size === 0) this.instances.delete(session);
+    const hadUnseen = this.isUnseen(session);
+    if (!hadUnseen) return false;
+
+    // Clear unseen flags for all instances — keep the instances themselves
+    // (pruneTerminal will remove seen terminal instances after timeout)
+    const sessionInstances = this.instances.get(session);
+    if (sessionInstances) {
+      for (const key of sessionInstances.keys()) {
+        this.unseenInstances.delete(this.unseenKey(session, key));
       }
     }
-    return cleared;
+    return true;
   }
 
   pruneStuck(timeoutMs: number): void {
@@ -108,22 +117,24 @@ export class AgentTracker {
       for (const [key, event] of sessionInstances) {
         if (event.status === "running" && now - event.ts > timeoutMs) {
           sessionInstances.delete(key);
+          this.unseenInstances.delete(this.unseenKey(session, key));
         }
       }
       if (sessionInstances.size === 0) {
         this.instances.delete(session);
-        this.unseen.delete(session);
       }
     }
   }
 
-  /** Auto-prune terminal instances older than timeout, but only if session is not unseen */
+  /** Auto-prune terminal instances older than timeout, but only if instance is not unseen */
   pruneTerminal(): void {
     const now = Date.now();
     for (const [session, sessionInstances] of this.instances) {
-      if (this.unseen.has(session)) continue; // Don't prune unseen — user hasn't looked yet
       for (const [key, event] of sessionInstances) {
-        if (TERMINAL_STATUSES.has(event.status) && now - event.ts > TERMINAL_PRUNE_MS) {
+        if (!TERMINAL_STATUSES.has(event.status)) continue;
+        const ukey = this.unseenKey(session, key);
+        if (this.unseenInstances.has(ukey)) continue; // Don't prune unseen — user hasn't looked yet
+        if (now - event.ts > TERMINAL_PRUNE_MS) {
           sessionInstances.delete(key);
         }
       }
@@ -134,28 +145,37 @@ export class AgentTracker {
   }
 
   isUnseen(session: string): boolean {
-    return this.unseen.has(session);
+    // Session is unseen if any instance within it is unseen
+    const sessionInstances = this.instances.get(session);
+    if (!sessionInstances) return false;
+    for (const key of sessionInstances.keys()) {
+      if (this.unseenInstances.has(this.unseenKey(session, key))) return true;
+    }
+    return false;
   }
 
   getUnseen(): string[] {
-    return [...this.unseen];
+    // Derive session-level unseen from per-instance tracking
+    const sessions = new Set<string>();
+    for (const ukey of this.unseenInstances) {
+      sessions.add(ukey.split("\0")[0]!);
+    }
+    return [...sessions];
   }
 
   handleFocus(session: string): boolean {
     this.active.clear();
     this.active.add(session);
 
-    const hadUnseen = this.unseen.delete(session);
+    const hadUnseen = this.isUnseen(session);
     if (hadUnseen) {
-      // Only clear terminal instances when user visits
+      // Clear unseen flags — keep terminal instances visible (as "seen")
+      // pruneTerminal will clean them up after timeout
       const sessionInstances = this.instances.get(session);
       if (sessionInstances) {
-        for (const [key, event] of sessionInstances) {
-          if (TERMINAL_STATUSES.has(event.status)) {
-            sessionInstances.delete(key);
-          }
+        for (const key of sessionInstances.keys()) {
+          this.unseenInstances.delete(this.unseenKey(session, key));
         }
-        if (sessionInstances.size === 0) this.instances.delete(session);
       }
     }
     return hadUnseen;

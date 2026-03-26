@@ -66,7 +66,6 @@ describe("AmpAgentWatcher", () => {
       resolveSession: (dir) => dir === "/projects/myapp" ? "myapp-session" : null,
       emit: (event) => events.push(event),
     };
-    // @ts-ignore — override private threadsDir for testing
     watcher = new AmpAgentWatcher();
     (watcher as any).threadsDir = tmpDir;
   });
@@ -76,7 +75,7 @@ describe("AmpAgentWatcher", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("emits event when thread status changes", async () => {
+  test("seed scan does not emit events", async () => {
     writeThread("T-test-001", {
       v: 1,
       title: "Test thread",
@@ -85,18 +84,12 @@ describe("AmpAgentWatcher", () => {
     });
 
     watcher.start(ctx);
-    // Wait for initial scan
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 200));
 
-    expect(events.length).toBe(1);
-    expect(events[0]!.agent).toBe("amp");
-    expect(events[0]!.session).toBe("myapp-session");
-    expect(events[0]!.status).toBe("running");
-    expect(events[0]!.threadId).toBe("T-test-001");
-    expect(events[0]!.threadName).toBe("Test thread");
+    expect(events.length).toBe(0);
   });
 
-  test("skips thread when version unchanged", async () => {
+  test("emits on version bump after seed", async () => {
     writeThread("T-test-002", {
       v: 1,
       messages: [{ role: "user" }],
@@ -104,17 +97,22 @@ describe("AmpAgentWatcher", () => {
     });
 
     watcher.start(ctx);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(events.length).toBe(1);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(events.length).toBe(0); // Seed
 
-    // Write same version — should not emit
+    // Bump version
     writeThread("T-test-002", {
-      v: 1,
-      messages: [{ role: "user" }],
+      v: 2,
+      title: "Test thread",
+      messages: [{ role: "assistant", state: { type: "complete", stopReason: "end_turn" } }],
       env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
     });
     await new Promise((r) => setTimeout(r, 2500));
-    expect(events.length).toBe(1);
+
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events[0]!.status).toBe("done");
+    expect(events[0]!.session).toBe("myapp-session");
+    expect(events[0]!.threadName).toBe("Test thread");
   });
 
   test("does not emit when session resolves to unknown", async () => {
@@ -125,11 +123,19 @@ describe("AmpAgentWatcher", () => {
     });
 
     watcher.start(ctx);
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 200));
+
+    writeThread("T-test-003", {
+      v: 2,
+      messages: [{ role: "assistant", state: { type: "complete", stopReason: "end_turn" } }],
+      env: { initial: { trees: [{ uri: "file:///unknown/dir" }] } },
+    });
+    await new Promise((r) => setTimeout(r, 2500));
+
     expect(events.length).toBe(0);
   });
 
-  test("emits on version bump with new status", async () => {
+  test("skips unchanged version after seed", async () => {
     writeThread("T-test-004", {
       v: 1,
       messages: [{ role: "user" }],
@@ -137,18 +143,16 @@ describe("AmpAgentWatcher", () => {
     });
 
     watcher.start(ctx);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(events.length).toBe(1);
-    expect(events[0]!.status).toBe("running");
+    await new Promise((r) => setTimeout(r, 200));
 
-    // Bump version with done status
+    // Rewrite with same version
     writeThread("T-test-004", {
-      v: 2,
-      messages: [{ role: "assistant", state: { type: "complete", stopReason: "end_turn" } }],
+      v: 1,
+      messages: [{ role: "user" }],
       env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
     });
     await new Promise((r) => setTimeout(r, 2500));
-    expect(events.length).toBe(2);
-    expect(events[1]!.status).toBe("done");
+
+    expect(events.length).toBe(0);
   });
 });

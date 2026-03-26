@@ -10,7 +10,7 @@ Every plugin exports one function:
 import type { PluginAPI } from "@opensessions/core";
 
 export default function (api: PluginAPI) {
-  // Register a mux provider, or do other setup
+  // Register a mux provider, agent watcher, or do other setup
 }
 ```
 
@@ -19,6 +19,7 @@ The `PluginAPI` gives you:
 | Method / Property | Description |
 |---|---|
 | `api.registerMux(provider)` | Register a `MuxProvider` implementation |
+| `api.registerWatcher(watcher)` | Register an `AgentWatcher` implementation |
 | `api.serverPort` | The server port (default: `7391`) |
 | `api.serverHost` | The server host (default: `127.0.0.1`) |
 
@@ -28,7 +29,7 @@ The `PluginAPI` gives you:
 
 opensessions loads plugins in order:
 
-1. **Builtins** — `TmuxProvider` is always registered
+1. **Builtins** — `TmuxProvider` is always registered. Built-in agent watchers for Amp, Claude Code, and OpenCode are registered automatically.
 2. **Local plugins** — `~/.config/opensessions/plugins/*.ts` (scanned one level deep)
 3. **npm packages** — listed in `~/.config/opensessions/config.json` under `"plugins"`
 
@@ -51,7 +52,7 @@ Add package names to your config:
 
 ```json
 {
-  "plugins": ["opensessions-mux-zellij", "opensessions-mux-screen"]
+  "plugins": ["opensessions-mux-zellij", "opensessions-agent-aider"]
 }
 ```
 
@@ -203,12 +204,103 @@ Then add to their config:
 
 ---
 
+## Creating an Agent Watcher Plugin
+
+Built-in watchers handle Amp, Claude Code, and OpenCode automatically. For other agents (e.g. Aider, Goose, custom agents), create a watcher plugin.
+
+### AgentWatcher Interface
+
+```typescript
+interface AgentWatcher {
+  /** Unique name for this watcher (e.g. "aider") */
+  readonly name: string;
+
+  /** Start watching. Called once by the server with the watcher context. */
+  start(ctx: AgentWatcherContext): void;
+
+  /** Stop watching and clean up resources. */
+  stop(): void;
+}
+```
+
+### AgentWatcherContext
+
+The server provides a context object so watchers can resolve sessions and emit events without knowing about server internals:
+
+```typescript
+interface AgentWatcherContext {
+  /** Resolve a project directory path to a mux session name, or null if unmatched */
+  resolveSession(projectDir: string): string | null;
+
+  /** Emit an agent event (applied to tracker + broadcast automatically) */
+  emit(event: AgentEvent): void;
+}
+```
+
+### Example: Aider Watcher
+
+```typescript
+// index.ts
+import type { PluginAPI, AgentWatcher, AgentWatcherContext, AgentEvent } from "@opensessions/core";
+import { watch } from "fs";
+
+class AiderAgentWatcher implements AgentWatcher {
+  readonly name = "aider";
+  private watcher: ReturnType<typeof watch> | null = null;
+
+  start(ctx: AgentWatcherContext): void {
+    // Watch aider's log/state files for activity
+    const logDir = `${process.env.HOME}/.aider/logs`;
+
+    this.watcher = watch(logDir, { recursive: true }, (_eventType, filename) => {
+      if (!filename) return;
+
+      // Extract project directory from the log path
+      const projectDir = this.extractProjectDir(filename);
+      const session = ctx.resolveSession(projectDir);
+      if (!session) return;
+
+      ctx.emit({
+        agent: "aider",
+        session,
+        status: "running",
+        ts: Date.now(),
+      });
+    });
+  }
+
+  stop(): void {
+    this.watcher?.close();
+    this.watcher = null;
+  }
+
+  private extractProjectDir(filename: string): string {
+    // Parse aider's log filename to determine project directory
+    return filename.replace(/\.log$/, "");
+  }
+}
+
+export default function (api: PluginAPI) {
+  api.registerWatcher(new AiderAgentWatcher());
+}
+```
+
+### Watcher Lifecycle
+
+1. The plugin factory registers the watcher via `api.registerWatcher()`
+2. The server calls `watcher.start(ctx)` after all plugins are loaded
+3. The watcher uses `ctx.resolveSession(projectDir)` to map project directories to mux session names
+4. The watcher uses `ctx.emit(event)` to report agent status changes
+5. On shutdown, the server calls `watcher.stop()` for cleanup
+
+---
+
 ## Naming Conventions
 
 | Type | Pattern | Example |
 |---|---|---|
 | Mux provider | `opensessions-mux-<name>` | `opensessions-mux-zellij` |
-| Agent bridge | `opensessions-agent-<name>` | `opensessions-agent-aider` |
+| Agent watcher | `opensessions-agent-<name>` | `opensessions-agent-aider` |
 | Theme | `opensessions-theme-<name>` | `opensessions-theme-nord` |
 
 ---
@@ -229,83 +321,8 @@ The server auto-detects tmux from the `$TMUX` environment variable, registers se
 
 ### Connecting an AI Agent
 
-Agents report status by POSTing JSON to the server. No code changes to opensessions needed.
+**Amp, Claude Code, and OpenCode** work out of the box — built-in watchers detect their activity automatically. No plugins or configuration needed.
 
-#### Amp
+For **other agents** (Aider, Goose, custom agents, etc.), create an agent watcher plugin and register it via `api.registerWatcher()`. See [Creating an Agent Watcher Plugin](#creating-an-agent-watcher-plugin) above.
 
-Copy the plugin to your Amp config:
-
-```bash
-cp examples/amp-plugin.ts ~/.config/amp/plugins/opensessions.ts
-```
-
-Or create `~/.config/amp/plugins/opensessions.ts`:
-
-```typescript
-import type { PluginAPI } from "@ampcode/plugin";
-import { appendFileSync } from "fs";
-
-const SERVER_URL = "http://127.0.0.1:7391/event";
-const EVENTS_FILE = "/tmp/opensessions-events.jsonl";
-
-async function getTmuxSession($: PluginAPI["$"]): Promise<string> {
-  try {
-    const result = await $`tmux display-message -p '#S'`;
-    return result.stdout.trim();
-  } catch {
-    return "unknown";
-  }
-}
-
-async function writeEvent(agent: string, session: string, status: string): Promise<void> {
-  const payload = JSON.stringify({ agent, session, status, ts: Date.now() });
-  try {
-    await fetch(SERVER_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: payload,
-    });
-  } catch {
-    try { appendFileSync(EVENTS_FILE, payload + "\n"); } catch {}
-  }
-}
-
-export default function (amp: PluginAPI) {
-  let sessionName: string | null = null;
-
-  getTmuxSession(amp.$).then((name) => {
-    sessionName = name;
-  });
-
-  amp.on("agent.start", async (_event, _ctx) => {
-    if (!sessionName) sessionName = await getTmuxSession(amp.$);
-    await writeEvent("amp", sessionName, "running");
-    return {};
-  });
-
-  amp.on("agent.end", async (event, _ctx) => {
-    if (!sessionName) sessionName = await getTmuxSession(amp.$);
-    await writeEvent("amp", sessionName, event.status);
-    return undefined;
-  });
-
-  amp.on("tool.call", async (_event, _ctx) => {
-    if (sessionName) await writeEvent("amp", sessionName, "running");
-    return { action: "allow" };
-  });
-}
-```
-
-#### Claude Code
-
-Add hooks to `~/.claude/settings.json`. See [CONTRACTS.md](./CONTRACTS.md#claude-code-hooks).
-
-#### Any Agent (curl)
-
-```bash
-curl -s -X POST http://127.0.0.1:7391/event \
-  -H 'Content-Type: application/json' \
-  -d '{"agent":"my-agent","session":"'"$(tmux display-message -p '#S')"'","status":"running","ts":'"$(date +%s000)"'}'
-```
-
-See [CONTRACTS.md](./CONTRACTS.md) for full examples.
+See [CONTRACTS.md](./CONTRACTS.md) for the `AgentEvent` schema and `AgentStatus` values.

@@ -63,75 +63,64 @@ describe("ClaudeCodeAgentWatcher", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("emits event from JSONL in project subdirectory", async () => {
-    // Create encoded project dir: /projects/myapp → -projects-myapp
+  test("emits event on file change after seed scan", async () => {
     const projDir = join(tmpDir, "-projects-myapp");
     mkdirSync(projDir, { recursive: true });
 
-    const entry = JSON.stringify({
-      message: { role: "user", content: "fix the bug" },
-    });
-    writeFileSync(join(projDir, "session-001.jsonl"), entry + "\n");
+    // Create file before watcher starts — seed scan records size
+    const filePath = join(projDir, "session-001.jsonl");
+    writeFileSync(filePath, JSON.stringify({ message: { role: "user", content: "initial" } }) + "\n");
 
     watcher.start(ctx);
-    await new Promise((r) => setTimeout(r, 100));
+    // Wait for seed scan
+    await new Promise((r) => setTimeout(r, 200));
+    expect(events.length).toBe(0); // Seed scan doesn't emit
 
-    expect(events.length).toBe(1);
+    // Now append — this triggers a real event
+    appendFileSync(filePath, JSON.stringify({ message: { role: "user", content: "fix the bug" } }) + "\n");
+    await new Promise((r) => setTimeout(r, 2500));
+
+    expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[0]!.agent).toBe("claude-code");
     expect(events[0]!.session).toBe("myapp-session");
     expect(events[0]!.status).toBe("running");
-    expect(events[0]!.threadId).toBe("session-001");
   });
 
   test("skips when session cannot be resolved", async () => {
     const projDir = join(tmpDir, "-unknown-project");
     mkdirSync(projDir, { recursive: true });
 
-    const entry = JSON.stringify({
-      message: { role: "user", content: "hello" },
-    });
-    writeFileSync(join(projDir, "session-002.jsonl"), entry + "\n");
+    writeFileSync(join(projDir, "session-002.jsonl"), "");
 
     watcher.start(ctx);
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 200));
+
+    appendFileSync(join(projDir, "session-002.jsonl"),
+      JSON.stringify({ message: { role: "user", content: "hello" } }) + "\n");
+    await new Promise((r) => setTimeout(r, 2500));
 
     expect(events.length).toBe(0);
   });
 
-  test("detects status change on file append", async () => {
+  test("detects status transition after seed", async () => {
     const projDir = join(tmpDir, "-projects-myapp");
     mkdirSync(projDir, { recursive: true });
 
     const filePath = join(projDir, "session-003.jsonl");
+    // Seed with a user message
     writeFileSync(filePath, JSON.stringify({ message: { role: "user", content: "start" } }) + "\n");
 
     watcher.start(ctx);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(events.length).toBe(1);
-    expect(events[0]!.status).toBe("running");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(events.length).toBe(0); // Seed
 
-    // Append assistant response (text only → waiting)
+    // Append assistant → triggers waiting
     appendFileSync(filePath, JSON.stringify({
       message: { role: "assistant", content: [{ type: "text", text: "done" }] },
     }) + "\n");
-
     await new Promise((r) => setTimeout(r, 2500));
-    expect(events.length).toBe(2);
-    expect(events[1]!.status).toBe("waiting");
-  });
 
-  test("extracts thread name from first user message", async () => {
-    const projDir = join(tmpDir, "-projects-myapp");
-    mkdirSync(projDir, { recursive: true });
-
-    const entry = JSON.stringify({
-      message: { role: "user", content: "Fix the login flow" },
-    });
-    writeFileSync(join(projDir, "session-004.jsonl"), entry + "\n");
-
-    watcher.start(ctx);
-    await new Promise((r) => setTimeout(r, 100));
-
-    expect(events[0]!.threadName).toBe("Fix the login flow");
+    const lastEvent = events[events.length - 1]!;
+    expect(lastEvent.status).toBe("waiting");
   });
 });

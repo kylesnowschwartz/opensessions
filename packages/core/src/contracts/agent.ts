@@ -7,6 +7,8 @@ export interface AgentEvent {
   ts: number;
   threadId?: string;
   threadName?: string;
+  /** Set by tracker when serializing for the TUI — true if user hasn't seen this terminal state */
+  unseen?: boolean;
 }
 
 export const TERMINAL_STATUSES = new Set<AgentStatus>(["done", "error", "interrupted"]);

@@ -9,8 +9,12 @@ opensessions/
 ├── packages/
 │   ├── core/          # @opensessions/core — server, contracts, mux providers, agent tracker
 │   │   ├── src/
-│   │   │   ├── contracts/   # AgentEvent, AgentStatus, MuxProvider, MuxSessionInfo
+│   │   │   ├── contracts/   # AgentEvent, AgentStatus, AgentWatcher, MuxProvider, MuxSessionInfo
 │   │   │   ├── agents/      # AgentTracker (state management for agent events)
+│   │   │   │   └── watchers/  # Built-in agent watchers
+│   │   │   │       ├── amp.ts
+│   │   │   │       ├── claude-code.ts
+│   │   │   │       └── opencode.ts
 │   │   │   ├── mux/         # MuxProvider implementations (tmux, detect)
 │   │   │   ├── server/      # WebSocket server, launcher, startup
 │   │   │   ├── shared.ts    # Shared types, constants, palette
@@ -29,7 +33,7 @@ opensessions/
 ## Key Architecture Decisions
 
 1. **Monorepo**: Turborepo + Bun workspaces. Two packages: `@opensessions/core` and `@opensessions/tui`
-2. **Agent-agnostic**: Any agent POSTs to `http://127.0.0.1:7391/event` with `{agent, session, status, ts}`. No agent-specific code in core.
+2. **Built-in agent watchers**: Core ships with `AmpAgentWatcher`, `ClaudeCodeAgentWatcher`, and `OpenCodeAgentWatcher` that watch agent data directories directly. External agents integrate via the `AgentWatcher` plugin interface.
 3. **Mux-agnostic**: `MuxProvider` interface abstracts all mux operations. `TmuxProvider` is the reference implementation.
 4. **MuxProvider is SYNC**: All methods use `Bun.spawnSync` — matches the existing pattern and keeps the server simple.
 5. **Auto-detect mux**: `detectMux()` checks `$TMUX`, `$ZELLIJ_SESSION_NAME` env vars. Config file override planned.
@@ -37,9 +41,9 @@ opensessions/
 
 ## Contracts
 
-### AgentEvent (POST /event)
+### AgentEvent
 ```typescript
-{ agent: string, session: string, status: AgentStatus, ts: number }
+{ agent: string, session: string, status: AgentStatus, ts: number, threadId?: string, threadName?: string, unseen?: number }
 ```
 `AgentStatus = "running" | "idle" | "done" | "error" | "waiting" | "interrupted"`
 
@@ -58,6 +62,15 @@ interface MuxProvider {
 }
 ```
 
+### AgentWatcher Interface
+```typescript
+interface AgentWatcher {
+  name: string;
+  watch(callback: (event: AgentEvent) => void): void;
+  stop(): void;
+}
+```
+
 ## Stack
 
 - **Runtime**: Bun (not Node)
@@ -71,7 +84,7 @@ interface MuxProvider {
 - **TDD**: Red-green-refactor, vertical slices, one test at a time. Tests verify behavior through public interfaces.
 - **Sync mux calls**: MuxProvider methods are synchronous. Don't make them async.
 - **Preserve optimizations**: Batched tmux calls, 5s git cache with HEAD watchers, lightweight focus-only broadcasts.
-- **No agent-specific code in core**: The `/event` endpoint is the universal integration point. Agent-specific mapping lives in plugins/hooks outside this repo.
+- **Built-in watchers in core**: Amp, Claude Code, and OpenCode have built-in watchers in `core/src/agents/watchers/`. Community agents use the `AgentWatcher` plugin interface.
 - **OpenTUI Solid**: JSX needs `bunfig.toml` preload and `jsxImportSource: "@opentui/solid"` in tsconfig. Build needs `solidPlugin`.
 - **Never call `process.exit()` directly in TUI**: Use `renderer.destroy()`.
 
@@ -95,4 +108,8 @@ cd packages/tui && bun run build     # Build TUI for distribution
 
 ## Adding Agent Support
 
-No code changes needed. See `CONTRACTS.md` for integration examples. Agents just POST to the server.
+1. Create `packages/core/src/agents/watchers/your-agent.ts`
+2. Implement the `AgentWatcher` interface
+3. Register via `PluginAPI.registerWatcher()` in your plugin
+4. Add tests in `packages/core/test/`
+5. See `CONTRACTS.md` for integration examples

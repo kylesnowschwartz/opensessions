@@ -469,6 +469,34 @@ export class TmuxClient {
     return counts;
   }
 
+  // ─── Popups ────────────────────────────────────────
+
+  displayPopup(options: {
+    command: string;
+    title?: string;
+    width?: string | number;
+    height?: string | number;
+    style?: string;
+    borderStyle?: "rounded" | "sharp" | "double" | "heavy" | "simple" | "padded" | "none";
+    env?: Record<string, string>;
+    closOnExit?: boolean;
+  }): void {
+    const args = ["display-popup"];
+    if (options.title) args.push("-T", options.title);
+    if (options.width) args.push("-w", String(options.width));
+    if (options.height) args.push("-h", String(options.height));
+    if (options.style) args.push("-s", options.style);
+    if (options.borderStyle) args.push("-b", options.borderStyle);
+    if (options.env) {
+      for (const [k, v] of Object.entries(options.env)) {
+        args.push("-e", `${k}=${v}`);
+      }
+    }
+    if (options.closOnExit === false) args.push("-E");
+    args.push(options.command);
+    this.run(args);
+  }
+
   // ─── Hooks ─────────────────────────────────────────
 
   setGlobalHook(name: HookName, command: string): void {

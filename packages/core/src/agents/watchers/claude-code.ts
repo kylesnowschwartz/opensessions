@@ -7,9 +7,12 @@
  *
  * Directory structure: ~/.claude/projects/<encoded-path>/<session-id>.jsonl
  * Encoded path: /Users/foo/myproject → -Users-foo-myproject
+ *
+ * All file I/O is async to avoid blocking the server event loop.
  */
 
-import { readdirSync, readFileSync, statSync, watch, type FSWatcher } from "fs";
+import { watch, type FSWatcher } from "fs";
+import { readdir, stat } from "fs/promises";
 import { join, basename } from "path";
 import { homedir } from "os";
 import type { AgentStatus } from "../../contracts/agent";
@@ -79,7 +82,6 @@ function extractThreadName(entry: JournalEntry): string | undefined {
 
 /** Decode Claude's encoded project dir name back to a path */
 function decodeProjectDir(encoded: string): string {
-  // "-Users-foo-myproject" → "/Users/foo/myproject"
   return encoded.replace(/-/g, "/");
 }
 
@@ -93,6 +95,8 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private ctx: AgentWatcherContext | null = null;
   private projectsDir: string;
+  private scanning = false;
+  private seeded = false;
 
   constructor() {
     this.projectsDir = join(homedir(), ".claude", "projects");
@@ -100,8 +104,8 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
 
   start(ctx: AgentWatcherContext): void {
     this.ctx = ctx;
-    this.scan();
     this.setupWatchers();
+    setTimeout(() => this.scan(), 50);
     this.pollTimer = setInterval(() => this.scan(), POLL_MS);
   }
 
@@ -112,24 +116,30 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
     this.ctx = null;
   }
 
-  private processFile(filePath: string, projectDir: string): void {
+  private async processFile(filePath: string, projectDir: string): Promise<void> {
     if (!this.ctx) return;
 
     let size: number;
-    try { size = statSync(filePath).size; } catch { return; }
+    try { size = (await stat(filePath)).size; } catch { return; }
 
     const threadId = basename(filePath, ".jsonl");
     const prev = this.sessions.get(threadId);
 
     if (prev && size === prev.fileSize) return;
 
+    // Seed mode: record file sizes without reading/emitting
+    if (!this.seeded) {
+      this.sessions.set(threadId, { status: "idle", fileSize: size, projectDir });
+      return;
+    }
+
     const offset = prev?.fileSize ?? 0;
     if (size <= offset) return;
 
-    let text: string | null;
+    let text: string;
     try {
-      const raw = readFileSync(filePath);
-      text = new TextDecoder().decode(raw.subarray(offset, size));
+      const buf = await Bun.file(filePath).arrayBuffer();
+      text = new TextDecoder().decode(new Uint8Array(buf).subarray(offset, size));
     } catch {
       return;
     }
@@ -168,33 +178,41 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
     }
   }
 
-  private scan(): void {
-    let dirs: string[];
-    try { dirs = readdirSync(this.projectsDir); } catch { return; }
+  private async scan(): Promise<void> {
+    if (this.scanning || !this.ctx) return;
+    this.scanning = true;
 
-    for (const dir of dirs) {
-      const dirPath = join(this.projectsDir, dir);
-      try { if (!statSync(dirPath).isDirectory()) continue; } catch { continue; }
+    try {
+      let dirs: string[];
+      try { dirs = await readdir(this.projectsDir); } catch { return; }
 
-      const projectDir = decodeProjectDir(dir);
+      for (const dir of dirs) {
+        const dirPath = join(this.projectsDir, dir);
+        try { if (!(await stat(dirPath)).isDirectory()) continue; } catch { continue; }
 
-      let files: string[];
-      try { files = readdirSync(dirPath); } catch { continue; }
+        const projectDir = decodeProjectDir(dir);
 
-      for (const file of files) {
-        if (!file.endsWith(".jsonl")) continue;
-        this.processFile(join(dirPath, file), projectDir);
+        let files: string[];
+        try { files = await readdir(dirPath); } catch { continue; }
+
+        for (const file of files) {
+          if (!file.endsWith(".jsonl")) continue;
+          await this.processFile(join(dirPath, file), projectDir);
+        }
       }
+    } finally {
+      if (!this.seeded) this.seeded = true;
+      this.scanning = false;
     }
   }
 
   private setupWatchers(): void {
     let dirs: string[];
-    try { dirs = readdirSync(this.projectsDir); } catch { return; }
+    try { dirs = require("fs").readdirSync(this.projectsDir); } catch { return; }
 
     for (const dir of dirs) {
       const dirPath = join(this.projectsDir, dir);
-      try { if (!statSync(dirPath).isDirectory()) continue; } catch { continue; }
+      try { if (!require("fs").statSync(dirPath).isDirectory()) continue; } catch { continue; }
 
       const projectDir = decodeProjectDir(dir);
       try {
@@ -211,7 +229,7 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
       const w = watch(this.projectsDir, (eventType, filename) => {
         if (eventType !== "rename" || !filename) return;
         const dirPath = join(this.projectsDir, filename);
-        try { if (!statSync(dirPath).isDirectory()) return; } catch { return; }
+        try { if (!require("fs").statSync(dirPath).isDirectory()) return; } catch { return; }
 
         const projectDir = decodeProjectDir(filename);
         try {
