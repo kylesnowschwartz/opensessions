@@ -2,7 +2,7 @@
 
 tmux is all you need. make tmux great again :) 
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/21d46849-e79f-4db0-92b6-fabf95efa403" />
+<img width="4180" height="2416" alt="amp-img-e686694168e21738-aesthetic" src="https://github.com/user-attachments/assets/2caaee1a-b3f5-4041-aa3c-5b3668aa1912" />
 
 `opensessions` is a sidebar for `tmux` when your sessions, agents, and localhost tabs start multiplying.
 
