@@ -1,41 +1,63 @@
-# CONTRACTS.md — Agent Integration Guide
+# Contracts And Extension Interfaces
 
-opensessions detects agent status automatically using built-in **AgentWatcher** providers that watch each agent's data files directly. No configuration or hooks are needed for supported agents.
+This document is the reference for extending opensessions. It describes the agent event model, watcher interfaces, mux provider capabilities, and the runtime behaviors extension authors need to match.
 
-## Built-in Agent Watchers
+For end-user setup, start with the docs linked from [README.md](./README.md). For plugin packaging workflow, see [PLUGINS.md](./PLUGINS.md).
 
-opensessions ships with watchers for three agents. Each watcher monitors the agent's native data files, detects status changes, and maps them to mux sessions via the project directory.
+## Built-In Watchers
 
-### Amp (`AmpAgentWatcher`)
+opensessions currently registers four built-in watchers at server startup.
 
-- **Watches:** `~/.local/share/amp/threads/T-*.json` for thread state changes
-- **Also watches:** `~/.local/share/amp/session.json` for thread-level "seen" state (clears `unseen` when the user focuses a terminal thread)
-- **Detection:** Uses `fs.watch` + polling (2s). Skips threads not modified in the last 5 minutes.
-- **Status mapping:** Derived from the last message's `role` and `state` (streaming → `running`, cancelled → `interrupted`, end_turn → `done`, tool_use → `running`)
-- **Session resolution:** Reads `env.initial.trees[0].uri` from the thread file to get the project directory
+### Amp
 
-### Claude Code (`ClaudeCodeAgentWatcher`)
+- Watches `~/.local/share/amp/threads/T-*.json`.
+- Also watches `~/.local/share/amp/session.json` to clear unseen state when a terminal Amp thread becomes seen there.
+- Uses `fs.watch` plus a 2 second polling pass.
+- Skips stale thread files older than 5 minutes.
+- Resolves the project directory from `env.initial.trees[0].uri`.
 
-- **Watches:** `~/.claude/projects/<encoded-path>/*.jsonl` for JSONL journal changes
-- **Encoded path format:** `/Users/foo/myproject` → `-Users-foo-myproject`
-- **Detection:** Uses `fs.watch` on each project directory + polling (2s). Reads only new bytes appended since last check.
-- **Status mapping:** Derived from the last journal entry's `message.role` and content (assistant with `tool_use` → `running`, assistant without → `waiting`, user → `running`)
-- **Session resolution:** Decoded from the directory name
+### Claude Code
 
-### OpenCode (`OpenCodeAgentWatcher`)
+- Watches `~/.claude/projects/<encoded-path>/*.jsonl`.
+- Uses `fs.watch` plus a 2 second polling pass.
+- Reads only appended bytes after the last observed file size.
+- Decodes project directories from folder names such as `-Users-me-project`.
 
-- **Watches:** `~/.local/share/opencode/opencode.db` SQLite database (or `$OPENCODE_DB_PATH`)
-- **Detection:** Polls every 3s using `bun:sqlite` in read-only mode. Queries `session` and `message` tables.
-- **Status mapping:** Derived from the last message's `role` and `finish` field (assistant with `tool-calls` → `running`, assistant without → `waiting`, user → `running`)
-- **Session resolution:** Reads `directory` field from the session row
+### Codex
 
----
+- Watches `~/.codex/sessions/**/*.jsonl` or `$CODEX_HOME/sessions/**/*.jsonl`.
+- Reads `$CODEX_HOME/session_index.jsonl` for recent thread titles when available.
+- Uses recursive `fs.watch` plus a 2 second polling pass.
+- Skips stale transcript files older than 5 minutes.
+- Resolves mux sessions from `turn_context.cwd` inside the transcript.
+- Treats `user_message`, tool activity, and assistant `commentary` as `running`, assistant `final_answer` and `task_complete` as `done`, and `turn_aborted` as `interrupted`.
 
-## Agent Event Contract
+### OpenCode
 
-All watchers emit `AgentEvent` objects through the `AgentWatcherContext`:
+- Polls `~/.local/share/opencode/opencode.db` or `$OPENCODE_DB_PATH`.
+- Uses `bun:sqlite` in read-only mode.
+- Polls every 3 seconds.
+- Resolves mux sessions from the OpenCode session row's `directory` field.
 
-```typescript
+## Agent Model
+
+### `AgentStatus`
+
+```ts
+type AgentStatus =
+  | "idle"
+  | "running"
+  | "done"
+  | "error"
+  | "waiting"
+  | "interrupted";
+```
+
+Terminal states are `done`, `error`, and `interrupted`. The tracker uses those states to decide unseen behavior.
+
+### `AgentEvent`
+
+```ts
 interface AgentEvent {
   agent: string;
   session: string;
@@ -45,123 +67,192 @@ interface AgentEvent {
   threadName?: string;
   unseen?: boolean;
 }
-
-type AgentStatus = "idle" | "running" | "done" | "error" | "waiting" | "interrupted";
 ```
 
-**Fields:**
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `agent` | `string` | yes | Stable watcher identifier such as `amp`, `claude-code`, `codex`, or `opencode` |
+| `session` | `string` | yes | Resolved mux session name |
+| `status` | `AgentStatus` | yes | Current agent state |
+| `ts` | `number` | yes | Millisecond timestamp |
+| `threadId` | `string` | no | Instance key used to track multiple threads in one session |
+| `threadName` | `string` | no | Human-readable label shown in the detail panel |
+| `unseen` | `boolean` | no | Added by the tracker when serializing to the TUI |
 
-| Field        | Type    | Required | Description                              |
-|--------------|---------|----------|------------------------------------------|
-| `agent`      | string  | yes      | Agent identifier (e.g. `"amp"`, `"claude-code"`, `"opencode"`) |
-| `session`    | string  | yes      | Terminal multiplexer session name         |
-| `status`     | string  | yes      | One of: `running`, `idle`, `done`, `error`, `waiting`, `interrupted` |
-| `ts`         | number  | yes      | Unix timestamp in milliseconds           |
-| `threadId`   | string  | no       | Agent-specific thread/session identifier  |
-| `threadName` | string  | no       | Human-readable thread name or first prompt |
-| `unseen`     | boolean | no       | Set by tracker when serializing for the TUI — `true` if user hasn't seen this terminal state |
+### Tracker Semantics
 
-**Status meanings:**
+- The tracker keys instances by `agent:threadId` when `threadId` exists, otherwise by `agent`.
+- A session can have multiple active agent instances.
+- Unseen state is tracked per instance, then derived to the session level.
+- Non-terminal updates clear unseen state for that instance.
+- Stale `running` events are pruned after 3 minutes.
+- Seen terminal instances are pruned after 5 minutes.
 
-| Status        | Meaning                                |
-|---------------|----------------------------------------|
-| `running`     | Agent is actively working              |
-| `idle`        | Agent is ready, not processing         |
-| `done`        | Agent completed successfully           |
-| `error`       | Agent encountered an error             |
-| `waiting`     | Agent is waiting for user input        |
-| `interrupted` | Agent was manually interrupted         |
+## `AgentWatcher`
 
----
+```ts
+interface AgentWatcher {
+  readonly name: string;
+  start(ctx: AgentWatcherContext): void;
+  stop(): void;
+}
+```
 
-## AgentWatcher Interface
+### `AgentWatcherContext`
 
-To add support for a new agent, implement the `AgentWatcher` interface and register it via `PluginAPI.registerWatcher()`:
+```ts
+interface AgentWatcherContext {
+  resolveSession(projectDir: string): string | null;
+  emit(event: AgentEvent): void;
+}
+```
 
-```typescript
+`resolveSession(projectDir)` first checks for an exact directory match across registered mux sessions. If there is no exact match, the server falls back to parent-child prefix matching so nested project paths can still resolve.
+
+### Minimal Watcher Example
+
+```ts
 import type { AgentWatcher, AgentWatcherContext } from "@opensessions/core";
 
 export class MyAgentWatcher implements AgentWatcher {
   readonly name = "my-agent";
 
   start(ctx: AgentWatcherContext): void {
-    // Start watching data files, polling databases, etc.
-    // Use ctx.resolveSession(projectDir) to map a project directory to a mux session name.
-    // Use ctx.emit(event) to emit AgentEvent objects when status changes.
+    const projectDir = "/path/to/project";
+    const session = ctx.resolveSession(projectDir);
+    if (!session) return;
+
+    ctx.emit({
+      agent: this.name,
+      session,
+      status: "running",
+      ts: Date.now(),
+      threadId: "thread-1",
+      threadName: "Example task",
+    });
   }
 
   stop(): void {
-    // Clean up watchers, timers, and other resources.
   }
 }
 ```
 
-**`AgentWatcherContext`** provided to `start()`:
+## Mux Contracts
 
-```typescript
-interface AgentWatcherContext {
-  /** Resolve a project directory path to a mux session name, or null if unmatched */
-  resolveSession(projectDir: string): string | null;
-  /** Emit an agent event (applied to tracker + broadcast automatically) */
-  emit(event: AgentEvent): void;
+opensessions uses the capability model exported from `@opensessions/mux`. A provider must implement the required `MuxProviderV1` contract and may opt into extra capabilities.
+
+### Core Types
+
+```ts
+interface MuxSessionInfo {
+  readonly name: string;
+  readonly createdAt: number;
+  readonly dir: string;
+  readonly windows: number;
+}
+
+interface ActiveWindow {
+  readonly id: string;
+  readonly sessionName: string;
+  readonly active: boolean;
+}
+
+interface SidebarPane {
+  readonly paneId: string;
+  readonly sessionName: string;
+  readonly windowId: string;
+}
+
+type SidebarPosition = "left" | "right";
+```
+
+### Required Provider Interface
+
+```ts
+interface MuxProviderV1 {
+  readonly specificationVersion: "v1";
+  readonly name: string;
+
+  listSessions(): MuxSessionInfo[];
+  switchSession(name: string, clientTty?: string): void;
+  getCurrentSession(): string | null;
+  getSessionDir(name: string): string;
+  getPaneCount(name: string): number;
+  getClientTty(): string;
+  createSession(name?: string, dir?: string): void;
+  killSession(name: string): void;
+  setupHooks(serverHost: string, serverPort: number): void;
+  cleanupHooks(): void;
 }
 ```
 
-**Registration:**
+### Optional Capabilities
 
-```typescript
-import { PluginAPI } from "@opensessions/core";
+```ts
+interface WindowCapable {
+  listActiveWindows(): ActiveWindow[];
+  getCurrentWindowId(): string | null;
+}
 
-// In a plugin:
-pluginAPI.registerWatcher(new MyAgentWatcher());
-```
+interface SidebarCapable {
+  listSidebarPanes(sessionName?: string): SidebarPane[];
+  spawnSidebar(
+    sessionName: string,
+    windowId: string,
+    width: number,
+    position: SidebarPosition,
+    scriptsDir: string,
+  ): string | null;
+  hideSidebar(paneId: string): void;
+  killSidebarPane(paneId: string): void;
+  resizeSidebarPane(paneId: string, width: number): void;
+  cleanupSidebar(): void;
+}
 
-The built-in watchers (Amp, Claude Code, OpenCode) are registered automatically in `start.ts`. Custom watchers should be registered via the plugin API.
-
----
-
-## MuxProvider Interface
-
-To add support for a new terminal multiplexer, implement the `MuxProvider` interface from `@opensessions/core`:
-
-```typescript
-import type { MuxProvider, MuxSessionInfo } from "@opensessions/core";
-
-export class ZellijProvider implements MuxProvider {
-  readonly name = "zellij";
-
-  listSessions(): MuxSessionInfo[] {
-    // Return array of { name, createdAt, dir, windows }
-  }
-
-  switchSession(name: string, clientTty?: string): void {
-    // Switch to the named session
-  }
-
-  getCurrentSession(): string | null {
-    // Return the currently focused session name
-  }
-
-  getSessionDir(name: string): string {
-    // Return the working directory of the session
-  }
-
-  getPaneCount(name: string): number {
-    // Return number of panes in the session
-  }
-
-  getClientTty(): string {
-    // Return the client's TTY path
-  }
-
-  setupHooks(serverHost: string, serverPort: number): void {
-    // Set up hooks that POST to the server on session changes
-  }
-
-  cleanupHooks(): void {
-    // Remove hooks set up by setupHooks
-  }
+interface BatchCapable {
+  getAllPaneCounts(): Map<string, number>;
 }
 ```
 
-Then pass it to the server at startup, or contribute it to the `@opensessions/core` package.
+The server narrows providers with the runtime type guards exported from `@opensessions/mux`:
+
+- `isWindowCapable()`
+- `isSidebarCapable()`
+- `isBatchCapable()`
+- `isFullSidebarCapable()`
+
+### Provider Expectations
+
+- `listSessions()` should return enough information for the server to sort and render sessions.
+- `getCurrentSession()` should reflect the session attached to the current client when possible.
+- `setupHooks()` should install mux-native hooks if the mux supports them. If it does not, a no-op implementation is acceptable.
+- `createSession()` and `killSession()` power the TUI's new-session and kill-session flows.
+
+## `PluginAPI`
+
+Plugins are loaded as default-exported factory functions that receive this API:
+
+```ts
+interface PluginAPI {
+  registerMux(provider: MuxProvider): void;
+  registerWatcher(watcher: AgentWatcher): void;
+  readonly serverPort: number;
+  readonly serverHost: string;
+}
+```
+
+The current runtime passes `127.0.0.1:7391` here.
+
+## Built-In Runtime Behaviors To Know About
+
+- The server merges sessions from all registered providers into one state payload.
+- Session ordering is persisted separately from mux ordering.
+- tmux sidebars can be hidden into a stash session instead of being killed.
+- zellij does not currently install hooks, so some sidebar management is driven by polling and explicit commands.
+- The TUI expects a WebSocket server on `127.0.0.1:7391`.
+
+## Where To Start
+
+- Build a custom watcher: see the `AgentWatcher` section above.
+- Build a plugin package or local plugin: see [PLUGINS.md](./PLUGINS.md).
+- Understand the end-to-end runtime: see [docs/explanation/architecture.md](./docs/explanation/architecture.md).

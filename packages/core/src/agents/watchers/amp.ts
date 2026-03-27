@@ -18,8 +18,8 @@ import type { AgentWatcher, AgentWatcherContext } from "../../contracts/agent-wa
 // --- Thread file types ---
 
 interface MessageState {
-  type?: "complete" | "cancelled" | "streaming";
-  stopReason?: "end_turn" | "tool_use";
+  type?: string;
+  stopReason?: string;
 }
 
 interface Message {
@@ -32,6 +32,7 @@ interface ThreadSnapshot {
   version: number;
   title?: string;
   projectDir?: string;
+  mtimeMs: number;
 }
 
 const STALE_MS = 5 * 60 * 1000;
@@ -45,12 +46,16 @@ export function determineStatus(lastMsg: { role?: string; state?: MessageState }
   if (lastMsg.role === "user") return "running";
 
   if (lastMsg.role === "assistant") {
-    if (!lastMsg.state) return "running";
-    if (lastMsg.state.type === "streaming") return "running";
-    if (lastMsg.state.type === "cancelled") return "interrupted";
-    if (lastMsg.state.type === "complete") {
-      if (lastMsg.state.stopReason === "tool_use") return "running";
-      if (lastMsg.state.stopReason === "end_turn") return "done";
+    const state = lastMsg.state;
+    if (!state) return "running";
+    if (state.type === "streaming") return "running";
+    if (state.type === "cancelled" || state.type === "aborted" || state.type === "interrupted") return "interrupted";
+    if (state.type === "error" || state.type === "errored" || state.type === "failed") return "error";
+    if (state.type === "complete") {
+      if (state.stopReason === "tool_use") return "running";
+      if (state.stopReason === "end_turn") return "done";
+      // Amp uses other stop reasons such as max_tokens for terminal failures.
+      return "error";
     }
     return "waiting";
   }
@@ -117,6 +122,23 @@ export class AmpAgentWatcher implements AgentWatcher {
     this.ctx = null;
   }
 
+  private emitThread(threadId: string, snapshot: ThreadSnapshot): boolean {
+    if (!this.ctx || !snapshot.projectDir || snapshot.status === "idle") return false;
+
+    const session = this.ctx.resolveSession(snapshot.projectDir);
+    if (!session || session === "unknown") return false;
+
+    this.ctx.emit({
+      agent: "amp",
+      session,
+      status: snapshot.status,
+      ts: Date.now(),
+      threadId,
+      threadName: snapshot.title,
+    });
+    return true;
+  }
+
   private async processThread(filePath: string): Promise<boolean> {
     if (!this.ctx) return false;
 
@@ -127,52 +149,41 @@ export class AmpAgentWatcher implements AgentWatcher {
     const prev = this.threads.get(threadId);
 
     // Quick mtime check — skip if file hasn't changed since we last saw this version
-    if (prev && fileStat.mtimeMs <= (prev as any)._mtime) return false;
+    if (prev && fileStat.mtimeMs <= prev.mtimeMs) return false;
 
     const parsed = await parseThreadFile(filePath);
     if (!parsed) return false;
 
-    if (prev && parsed.version === prev.version) {
+    const status = determineStatus(parsed.lastMessage);
+    const statusChanged = prev?.status !== status;
+    const titleChanged = prev?.title !== parsed.title;
+    const projectDirChanged = prev?.projectDir !== parsed.projectDir;
+
+    if (prev && parsed.version === prev.version && !statusChanged && !titleChanged && !projectDirChanged) {
       // Update mtime even if version unchanged to avoid re-reading
-      (prev as any)._mtime = fileStat.mtimeMs;
+      prev.mtimeMs = fileStat.mtimeMs;
       return false;
     }
 
-    const status = determineStatus(parsed.lastMessage);
-    const session = parsed.projectDir
-      ? this.ctx.resolveSession(parsed.projectDir) ?? "unknown"
-      : "unknown";
-
-    const prevStatus = prev?.status;
-    const snapshot: ThreadSnapshot & { _mtime: number } = {
+    const snapshot: ThreadSnapshot = {
       status,
       version: parsed.version,
       title: parsed.title,
       projectDir: parsed.projectDir,
-      _mtime: fileStat.mtimeMs,
+      mtimeMs: fileStat.mtimeMs,
     };
     this.threads.set(threadId, snapshot);
 
     // Seed mode: record state without emitting
     if (!this.seeded) return false;
 
-    if (status !== prevStatus && session !== "unknown") {
-      this.ctx.emit({
-        agent: "amp",
-        session,
-        status,
-        ts: Date.now(),
-        threadId,
-        threadName: parsed.title,
-      });
-      return true;
-    }
-    return false;
+    return (statusChanged || titleChanged) && this.emitThread(threadId, snapshot);
   }
 
   private async scan(): Promise<void> {
     if (this.scanning || !this.ctx) return;
     this.scanning = true;
+    const initialSeed = !this.seeded;
 
     try {
       let files: string[];
@@ -188,7 +199,12 @@ export class AmpAgentWatcher implements AgentWatcher {
         await this.processThread(filePath);
       }
     } finally {
-      if (!this.seeded) this.seeded = true;
+      if (initialSeed) {
+        this.seeded = true;
+        for (const [threadId, snapshot] of this.threads) {
+          this.emitThread(threadId, snapshot);
+        }
+      }
       this.scanning = false;
     }
   }

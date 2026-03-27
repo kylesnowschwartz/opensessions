@@ -64,12 +64,16 @@ export class TmuxProvider implements MuxProvider {
 
   setupHooks(serverHost: string, serverPort: number): void {
     const base = `http://${serverHost}:${serverPort}`;
+    const hookPost = (path: string, data?: string) => {
+      const body = data ? ` -d '${data}'` : "";
+      return `run-shell -b "curl -s -o /dev/null -X POST ${base}${path}${body} >/dev/null 2>&1 || true"`;
+    };
     // tmux expands #{} formats at hook-fire time — no need for $(tmux display-message)
     // Use | as field separator (safe for session names, window IDs, TTYs)
-    const focusCmd = `run-shell -b "curl -s -o /dev/null -X POST ${base}/focus -d '#{client_tty}|#{session_name}|#{window_id}'"`;
-    const refreshCmd = `run-shell -b "curl -s -o /dev/null -X POST ${base}/refresh"`;
-    const resizeCmd = `run-shell -b "curl -s -o /dev/null -X POST ${base}/resize-sidebars"`;
-    const ensureCmd = `run-shell -b "curl -s -o /dev/null -X POST ${base}/ensure-sidebar -d '#{client_tty}|#{session_name}|#{window_id}'"`;
+    const focusCmd = hookPost("/focus", "#{client_tty}|#{session_name}|#{window_id}");
+    const refreshCmd = hookPost("/refresh");
+    const resizeCmd = hookPost("/resize-sidebars");
+    const ensureCmd = hookPost("/ensure-sidebar", "#{client_tty}|#{session_name}|#{window_id}");
 
     // client-session-changed: update focus AND ensure sidebar in the new session's window
     tmux.setGlobalHook("client-session-changed", `${focusCmd} ; ${ensureCmd}`);
@@ -134,7 +138,7 @@ export class TmuxProvider implements MuxProvider {
       if (stashedPane) {
         plog("spawnSidebar: restoring from stash", { paneId: stashedPane.id, target: targetPane.id });
         const joinFlag = position === "left" ? "-hb" : "-h";
-        rawTmux(["join-pane", joinFlag, "-l", String(width), "-s", stashedPane.id, "-t", targetPane.id]);
+        rawTmux(["join-pane", joinFlag, "-f", "-l", String(width), "-s", stashedPane.id, "-t", targetPane.id]);
         tmux.setPaneTitle(stashedPane.id, "opensessions");
         tmux.selectPane(targetPane.id);
         return stashedPane.id;
@@ -147,6 +151,7 @@ export class TmuxProvider implements MuxProvider {
       target: targetPane.id,
       direction: "horizontal",
       before: position === "left",
+      fullWindow: true,
       size: width,
       command: `REFOCUS_WINDOW=${windowId} exec ${scriptsDir}/start.sh`,
     });

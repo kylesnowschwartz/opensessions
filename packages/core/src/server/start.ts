@@ -3,6 +3,7 @@ import { PluginLoader } from "../plugins/loader";
 import { loadConfig } from "../config";
 import { AmpAgentWatcher } from "../agents/watchers/amp";
 import { ClaudeCodeAgentWatcher } from "../agents/watchers/claude-code";
+import { CodexAgentWatcher } from "../agents/watchers/codex";
 import { OpenCodeAgentWatcher } from "../agents/watchers/opencode";
 import { join } from "path";
 
@@ -61,6 +62,7 @@ if (extraProviders.length > 0) {
 // 6. Register built-in agent watchers
 loader.registerWatcher(new AmpAgentWatcher());
 loader.registerWatcher(new ClaudeCodeAgentWatcher());
+loader.registerWatcher(new CodexAgentWatcher());
 loader.registerWatcher(new OpenCodeAgentWatcher());
 
 const watchers = loader.getWatchers();

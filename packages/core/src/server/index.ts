@@ -382,13 +382,15 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       };
     });
 
+    const currentSession = getCurrentSession();
+
     if (sessions.length === 0) {
       focusedSession = null;
     } else if (!focusedSession || !sessions.some((s) => s.name === focusedSession)) {
-      focusedSession = sessions[0]!.name;
+      focusedSession = sessions.find((s) => s.name === currentSession)?.name ?? sessions[0]!.name;
     }
 
-    return { type: "state", sessions, focusedSession, currentSession: getCurrentSession(), theme: currentTheme, sidebarWidth, ts: Date.now() };
+    return { type: "state", sessions, focusedSession, currentSession, theme: currentTheme, sidebarWidth, ts: Date.now() };
   }
 
   function broadcastState() {
@@ -468,7 +470,18 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     return { session, windowId };
   }
 
-  let spawningInProgress = false;
+  const pendingSidebarSpawns = new Set<string>();
+  let pendingSidebarResize: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleSidebarResize(): void {
+    resizeSidebars();
+    if (pendingSidebarResize) clearTimeout(pendingSidebarResize);
+    // tmux/zellij can finish layout changes slightly after the pane appears.
+    pendingSidebarResize = setTimeout(() => {
+      pendingSidebarResize = null;
+      resizeSidebars();
+    }, 120);
+  }
 
   function toggleSidebar(ctx?: { session: string; windowId: string }): void {
     const providers = getProvidersWithSidebar();
@@ -495,7 +508,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
           ensureSidebarInWindow(p, { session: w.sessionName, windowId: w.id });
         }
       }
-      resizeSidebars();
+      scheduleSidebarResize();
       server.publish("sidebar", JSON.stringify({ type: "re-identify" }));
     }
     log("toggle", "done", { sidebarVisible });
@@ -515,10 +528,6 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       log("ensure", "SKIP", { hasProvider: !!p, sidebarVisible });
       return;
     }
-    if (spawningInProgress) {
-      log("ensure", "SKIP — spawn already in progress");
-      return;
-    }
 
     const curSession = ctx?.session ?? getCurrentSession();
     if (!curSession) {
@@ -532,7 +541,13 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       return;
     }
 
-    const existingPanes = p.listSidebarPanes(curSession);
+    const spawnKey = `${p.name}:${windowId}`;
+    if (pendingSidebarSpawns.has(spawnKey)) {
+      log("ensure", "SKIP — spawn already in progress", { curSession, windowId, provider: p.name });
+      return;
+    }
+
+    const existingPanes = p.listSidebarPanes();
     const hasInWindow = existingPanes.some((ep) => ep.windowId === windowId);
     log("ensure", "checking window", {
       curSession, windowId, existingPanes: existingPanes.length,
@@ -540,15 +555,15 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     });
 
     if (!hasInWindow) {
-      spawningInProgress = true;
+      pendingSidebarSpawns.add(spawnKey);
       log("ensure", "SPAWNING sidebar", { curSession, windowId, sidebarWidth, sidebarPosition, scriptsDir });
       try {
         const newPaneId = p.spawnSidebar(curSession, windowId, sidebarWidth, sidebarPosition, scriptsDir);
         log("ensure", "spawn result", { newPaneId });
       } finally {
-        spawningInProgress = false;
+        pendingSidebarSpawns.delete(spawnKey);
       }
-      resizeSidebars();
+      scheduleSidebarResize();
     }
   }
 
@@ -619,7 +634,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
         // In tmux, hooks handle this — but zellij has no hooks, so we do it here.
         // Use listActiveWindows() to find the target session's active tab
         // (getCurrentWindowId() won't work from the server since ZELLIJ_SESSION_NAME isn't set).
-        if (sidebarVisible && isFullSidebarCapable(p)) {
+        if (sidebarVisible && isFullSidebarCapable(p) && p.name === "zellij") {
           const activeWindows = p.listActiveWindows();
           const targetWindow = activeWindows.find((w) => w.sessionName === cmd.name);
           log("switch-session", "auto-ensure sidebar", {
@@ -643,7 +658,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
           const p = sessionProviders.get(name) ?? mux;
           p.switchSession(name);
 
-          if (sidebarVisible && isFullSidebarCapable(p)) {
+          if (sidebarVisible && isFullSidebarCapable(p) && p.name === "zellij") {
             const activeWindows = p.listActiveWindows();
             const targetWindow = activeWindows.find((w) => w.sessionName === name);
             if (targetWindow) {
@@ -734,6 +749,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     if (watcherBroadcastTimer) clearTimeout(watcherBroadcastTimer);
     if (debounceTimer) clearTimeout(debounceTimer);
     if (portPollTimer) clearInterval(portPollTimer);
+    if (pendingSidebarResize) clearTimeout(pendingSidebarResize);
     for (const watcher of gitHeadWatchers.values()) watcher.close();
     gitHeadWatchers.clear();
     if (idleTimer) clearTimeout(idleTimer);
@@ -758,7 +774,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
 
       if (req.method === "POST" && url.pathname === "/resize-sidebars") {
         log("http", "POST /resize-sidebars", { sidebarWidth });
-        resizeSidebars();
+        scheduleSidebarResize();
         return new Response("ok", { status: 200 });
       }
 

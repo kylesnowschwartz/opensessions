@@ -17,7 +17,8 @@ fi
 selected=$(find "$SEARCH_DIR" -mindepth 1 -maxdepth 3 -type d 2>/dev/null | fzf \
   --reverse \
   --header="Pick a directory for new session" \
-  --preview='ls -la {}' \
+  --preview=':' \
+  --preview-window=hidden \
   --bind='ctrl-c:abort')
 
 [ -z "$selected" ] && exit 0

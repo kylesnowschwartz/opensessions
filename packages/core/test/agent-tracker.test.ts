@@ -177,6 +177,17 @@ describe("AgentTracker", () => {
     expect(agents[0]!.unseen).toBeUndefined();
   });
 
+  // --- getAgents ordering ---
+
+  test("getAgents returns newest items first", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "done", threadId: "t1", ts: 100 }));
+    tracker.applyEvent(event({ session: "sess-1", status: "running", threadId: "t2", ts: 200 }));
+
+    const agents = tracker.getAgents("sess-1");
+
+    expect(agents.map((agent) => agent.threadId)).toEqual(["t2", "t1"]);
+  });
+
   // --- pruneTerminal ---
 
   test("pruneTerminal removes seen terminal instances after timeout", () => {

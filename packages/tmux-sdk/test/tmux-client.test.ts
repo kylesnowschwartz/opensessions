@@ -4,6 +4,21 @@ import { TmuxClient, TmuxError, tmux } from "../src/index";
 describe("TmuxClient", () => {
   const client = tmux();
 
+  class TestTmuxClient extends TmuxClient {
+    readonly calls: readonly string[][] = [];
+
+    override run(args: readonly string[]) {
+      (this.calls as string[][]).push([...args]);
+      return {
+        args: ["tmux", ...args],
+        exitCode: 0,
+        stdout: "%9\tdev\t@3\t1\t2\t1\t/dev/ttys001\t123\t/tmp\tbash\topensessions\t26\t80\t0\t25",
+        stderr: "",
+        ok: true,
+      };
+    }
+  }
+
   test("factory returns a TmuxClient instance", () => {
     expect(client).toBeInstanceOf(TmuxClient);
   });
@@ -148,5 +163,32 @@ describe("TmuxClient", () => {
     const result = custom.run(["list-sessions"]);
     expect(result.args).toContain("-L");
     expect(result.args).toContain("test-socket");
+  });
+
+  test("splitWindow can request a full-window split for sidebars", () => {
+    const custom = new TestTmuxClient();
+    const pane = custom.splitWindow({
+      target: "%1",
+      direction: "horizontal",
+      before: true,
+      fullWindow: true,
+      size: 26,
+      command: "echo sidebar",
+    });
+
+    expect(custom.calls[0]).toEqual([
+      "split-window",
+      "-hb",
+      "-f",
+      "-l",
+      "26",
+      "-t",
+      "%1",
+      "-P",
+      "-F",
+      "#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}",
+      "echo sidebar",
+    ]);
+    expect(pane?.id).toBe("%9");
   });
 });

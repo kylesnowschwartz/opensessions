@@ -125,6 +125,8 @@ export interface SplitWindowOptions {
   direction?: "horizontal" | "vertical";
   /** "before" = -b flag (split left/above), default is right/below */
   before?: boolean;
+  /** Split against the entire window instead of only the target pane. */
+  fullWindow?: boolean;
   size?: number;
   command?: string;
 }
@@ -295,7 +297,7 @@ export class TmuxClient {
     const args = ["list-windows"];
     if (!options || options.scope === "all" || !options.scope) {
       args.push("-a");
-    } else {
+    } else if (options.scope === "session") {
       args.push("-t", options.target);
     }
     args.push("-F", WINDOW_FORMAT);
@@ -315,7 +317,7 @@ export class TmuxClient {
       args.push("-a");
     } else if (options.scope === "session") {
       args.push("-s", "-t", options.target);
-    } else {
+    } else if (options.scope === "window") {
       args.push("-t", options.target);
     }
     args.push("-F", PANE_FORMAT);
@@ -330,6 +332,7 @@ export class TmuxClient {
     } else {
       args.push(options.before ? "-vb" : "-v");
     }
+    if (options.fullWindow) args.push("-f");
     if (options.size != null) args.push("-l", String(options.size));
     args.push("-t", options.target);
     args.push("-P", "-F", PANE_FORMAT);

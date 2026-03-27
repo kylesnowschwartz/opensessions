@@ -46,4 +46,18 @@ describe("saveConfig", () => {
 
     rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  test("preserves per-session detail panel heights across saves", () => {
+    const tmpDir = `/tmp/opensessions-test-save-${Date.now()}`;
+
+    saveConfig({ detailPanelHeights: { alpha: 12 } }, tmpDir);
+    saveConfig({ theme: "nord" }, tmpDir);
+
+    const config = loadConfig(tmpDir);
+
+    expect(config.detailPanelHeights).toEqual({ alpha: 12 });
+    expect(config.theme).toBe("nord");
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
 });

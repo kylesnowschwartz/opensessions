@@ -41,6 +41,10 @@ describe("determineStatus", () => {
     expect(determineStatus({ role: "assistant", state: { type: "cancelled" } })).toBe("interrupted");
   });
 
+  test("returns error for terminal assistant stop reasons other than end_turn", () => {
+    expect(determineStatus({ role: "assistant", state: { type: "complete", stopReason: "max_tokens" } })).toBe("error");
+  });
+
   test("returns waiting for unknown assistant state", () => {
     expect(determineStatus({ role: "assistant", state: {} })).toBe("waiting");
   });
@@ -75,22 +79,31 @@ describe("AmpAgentWatcher", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("seed scan does not emit events", async () => {
+  test("seed scan emits current non-idle threads with titles", async () => {
     writeThread("T-test-001", {
       v: 1,
-      title: "Test thread",
+      title: "Thread one",
       env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
       messages: [{ role: "user" }],
+    });
+    writeThread("T-test-002", {
+      v: 1,
+      title: "Thread two",
+      env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
+      messages: [{ role: "assistant", state: { type: "streaming" } }],
     });
 
     watcher.start(ctx);
     await new Promise((r) => setTimeout(r, 200));
 
-    expect(events.length).toBe(0);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.threadId).sort()).toEqual(["T-test-001", "T-test-002"]);
+    expect(events.map((event) => event.threadName).sort()).toEqual(["Thread one", "Thread two"]);
+    expect(events.every((event) => event.status === "running")).toBe(true);
   });
 
   test("emits on version bump after seed", async () => {
-    writeThread("T-test-002", {
+    writeThread("T-test-003", {
       v: 1,
       messages: [{ role: "user" }],
       env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
@@ -98,10 +111,10 @@ describe("AmpAgentWatcher", () => {
 
     watcher.start(ctx);
     await new Promise((r) => setTimeout(r, 200));
-    expect(events.length).toBe(0); // Seed
+    events = [];
 
     // Bump version
-    writeThread("T-test-002", {
+    writeThread("T-test-003", {
       v: 2,
       title: "Test thread",
       messages: [{ role: "assistant", state: { type: "complete", stopReason: "end_turn" } }],
@@ -116,7 +129,7 @@ describe("AmpAgentWatcher", () => {
   });
 
   test("does not emit when session resolves to unknown", async () => {
-    writeThread("T-test-003", {
+    writeThread("T-test-004", {
       v: 1,
       messages: [{ role: "user" }],
       env: { initial: { trees: [{ uri: "file:///unknown/dir" }] } },
@@ -124,8 +137,9 @@ describe("AmpAgentWatcher", () => {
 
     watcher.start(ctx);
     await new Promise((r) => setTimeout(r, 200));
+    events = [];
 
-    writeThread("T-test-003", {
+    writeThread("T-test-004", {
       v: 2,
       messages: [{ role: "assistant", state: { type: "complete", stopReason: "end_turn" } }],
       env: { initial: { trees: [{ uri: "file:///unknown/dir" }] } },
@@ -135,8 +149,8 @@ describe("AmpAgentWatcher", () => {
     expect(events.length).toBe(0);
   });
 
-  test("skips unchanged version after seed", async () => {
-    writeThread("T-test-004", {
+  test("emits title updates even when status stays running", async () => {
+    writeThread("T-test-005", {
       v: 1,
       messages: [{ role: "user" }],
       env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
@@ -144,15 +158,42 @@ describe("AmpAgentWatcher", () => {
 
     watcher.start(ctx);
     await new Promise((r) => setTimeout(r, 200));
+    events = [];
 
-    // Rewrite with same version
-    writeThread("T-test-004", {
-      v: 1,
+    writeThread("T-test-005", {
+      v: 2,
+      title: "Named thread",
       messages: [{ role: "user" }],
       env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
     });
     await new Promise((r) => setTimeout(r, 2500));
 
-    expect(events.length).toBe(0);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.status).toBe("running");
+    expect(events[0]!.threadName).toBe("Named thread");
+  });
+
+  test("emits error when Amp ends a thread with a terminal failure stop reason", async () => {
+    writeThread("T-test-006", {
+      v: 1,
+      messages: [{ role: "user" }],
+      env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
+    });
+
+    watcher.start(ctx);
+    await new Promise((r) => setTimeout(r, 200));
+    events = [];
+
+    writeThread("T-test-006", {
+      v: 2,
+      title: "Token limit hit",
+      messages: [{ role: "assistant", state: { type: "complete", stopReason: "max_tokens" } }],
+      env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
+    });
+    await new Promise((r) => setTimeout(r, 2500));
+
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events[0]!.status).toBe("error");
+    expect(events[0]!.threadName).toBe("Token limit hit");
   });
 });

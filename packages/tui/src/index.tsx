@@ -13,7 +13,9 @@ import {
   SERVER_PORT,
   SERVER_HOST,
   BUILTIN_THEMES,
+  loadConfig,
   resolveTheme,
+  saveConfig,
 } from "@opensessions/core";
 import { TmuxClient } from "@opensessions/mux-tmux";
 
@@ -46,6 +48,28 @@ const DIM = TextAttributes.DIM;
 const SPARK_BLOCKS = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 const THEME_NAMES = Object.keys(BUILTIN_THEMES);
+const DEFAULT_DETAIL_PANEL_HEIGHT = 10;
+const MIN_DETAIL_PANEL_HEIGHT = 4;
+const MAX_DETAIL_PANEL_HEIGHT = 18;
+
+function clampDetailPanelHeight(height: number): number {
+  return Math.max(MIN_DETAIL_PANEL_HEIGHT, Math.min(MAX_DETAIL_PANEL_HEIGHT, Math.round(height)));
+}
+
+function getStoredDetailPanelHeight(sessionName: string): number {
+  const stored = loadConfig().detailPanelHeights?.[sessionName];
+  return typeof stored === "number" ? clampDetailPanelHeight(stored) : DEFAULT_DETAIL_PANEL_HEIGHT;
+}
+
+function persistDetailPanelHeight(sessionName: string, height: number): void {
+  const config = loadConfig();
+  saveConfig({
+    detailPanelHeights: {
+      ...(config.detailPanelHeights ?? {}),
+      [sessionName]: clampDetailPanelHeight(height),
+    },
+  });
+}
 
 /** Refocus the main (non-sidebar) pane after TUI capability detection finishes.
  *  This must happen from the TUI process — doing it from start.sh races with
@@ -88,6 +112,19 @@ function getClientTty(): string {
   return "";
 }
 
+function getLocalSessionName(): string | null {
+  if (muxCtx.type === "tmux") {
+    const sessionName = muxCtx.sdk.display("#{session_name}", { target: muxCtx.paneId });
+    return sessionName || null;
+  }
+
+  if (muxCtx.type === "zellij") {
+    return muxCtx.sessionName || null;
+  }
+
+  return null;
+}
+
 function App() {
   const renderer = useRenderer();
 
@@ -102,6 +139,7 @@ function App() {
   const [mySession, setMySession] = createSignal<string | null>(null);
   const [connected, setConnected] = createSignal(false);
   const [spinIdx, setSpinIdx] = createSignal(0);
+  const [detailPanelHeight, setDetailPanelHeight] = createSignal(DEFAULT_DETAIL_PANEL_HEIGHT);
 
   // --- Modal state ---
   const [modal, setModal] = createSignal<"none" | "theme-picker" | "confirm-kill">("none");
@@ -109,6 +147,8 @@ function App() {
 
   const [clientTty, setClientTty] = createSignal(getClientTty());
   let ws: WebSocket | null = null;
+  let startupFocusSynced = false;
+  const startupSessionName = getLocalSessionName();
 
   function send(cmd: ClientCommand) {
     if (connected() && ws) ws.send(JSON.stringify(cmd));
@@ -121,13 +161,13 @@ function App() {
   }
 
   function reIdentify() {
+    const sessionName = getLocalSessionName();
+    if (!sessionName) return;
+
     if (muxCtx.type === "tmux") {
-      const { sdk, paneId } = muxCtx;
-      const sessName = sdk.display("#{session_name}", { target: paneId });
-      if (sessName) send({ type: "identify-pane", paneId, sessionName: sessName });
+      send({ type: "identify-pane", paneId: muxCtx.paneId, sessionName });
     } else if (muxCtx.type === "zellij") {
-      const sessName = process.env.ZELLIJ_SESSION_NAME;
-      if (sessName) send({ type: "identify-pane", paneId: muxCtx.paneId, sessionName: sessName });
+      send({ type: "identify-pane", paneId: muxCtx.paneId, sessionName });
     }
   }
 
@@ -150,6 +190,18 @@ function App() {
     send({ type: "set-theme", theme: themeName });
   }
 
+  function resizeDetailPanel(delta: -1 | 1) {
+    const nextHeight = clampDetailPanelHeight(detailPanelHeight() + delta);
+    if (nextHeight === detailPanelHeight()) return;
+
+    setDetailPanelHeight(nextHeight);
+
+    const sessionName = mySession();
+    if (sessionName) {
+      persistDetailPanelHeight(sessionName, nextHeight);
+    }
+  }
+
   function createNewSession() {
     if (muxCtx.type !== "tmux") {
       send({ type: "new-session" });
@@ -161,6 +213,7 @@ function App() {
       title: " new session ",
       width: "60%",
       height: "60%",
+      closeOnExit: true,
     });
   }
 
@@ -189,23 +242,30 @@ function App() {
       setConnected(true);
       const tty = clientTty();
       if (tty) send({ type: "identify", clientTty: tty });
-      if (muxCtx.type === "tmux") {
-        const { sdk, paneId } = muxCtx;
-        const sessName = sdk.display("#{session_name}", { target: paneId });
-        if (sessName) send({ type: "identify-pane", paneId, sessionName: sessName });
-      } else if (muxCtx.type === "zellij") {
-        const sessName = process.env.ZELLIJ_SESSION_NAME;
-        if (sessName) send({ type: "identify-pane", paneId: muxCtx.paneId, sessionName: sessName });
-      }
+      reIdentify();
     };
 
     socket.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as ServerMessage;
+        let startupFocusToPublish: string | null = null;
         batch(() => {
           if (msg.type === "state") {
+            const startupFocus = !startupFocusSynced
+              && startupSessionName
+              && msg.sessions.some((session) => session.name === startupSessionName)
+              ? startupSessionName
+              : msg.focusedSession;
+
+            if (startupFocus === startupSessionName) {
+              startupFocusSynced = true;
+              if (msg.focusedSession !== startupSessionName) {
+                startupFocusToPublish = startupSessionName;
+              }
+            }
+
             setSessions(reconcile(msg.sessions, { key: "name" }));
-            setFocusedSession(msg.focusedSession);
+            setFocusedSession(startupFocus);
             setCurrentSession(msg.currentSession);
             setTheme(resolveTheme(msg.theme));
           } else if (msg.type === "focus") {
@@ -214,10 +274,22 @@ function App() {
           } else if (msg.type === "your-session") {
             setMySession(msg.name);
             if (msg.clientTty) setClientTty(msg.clientTty);
+
+            if (!startupFocusSynced && sessions.some((session) => session.name === msg.name)) {
+              startupFocusSynced = true;
+              setFocusedSession(msg.name);
+              if (focusedSession() !== msg.name) {
+                startupFocusToPublish = msg.name;
+              }
+            }
           } else if (msg.type === "re-identify") {
             reIdentify();
           }
         });
+
+        if (startupFocusToPublish) {
+          send({ type: "focus-session", name: startupFocusToPublish });
+        }
       } catch {}
     };
 
@@ -250,6 +322,12 @@ function App() {
       setSpinIdx((i) => (i + 1) % SPINNERS.length);
     }, 120);
     onCleanup(() => clearInterval(interval));
+  });
+
+  createEffect(() => {
+    const sessionName = mySession();
+    if (!sessionName) return;
+    setDetailPanelHeight(getStoredDetailPanelHeight(sessionName));
   });
 
   useKeyboard((key) => {
@@ -306,6 +384,12 @@ function App() {
       case "down":
       case "j":
         moveLocalFocus(1);
+        break;
+      case "left":
+        resizeDetailPanel(-1);
+        break;
+      case "right":
+        resizeDetailPanel(1);
         break;
       case "return": {
         const focused = focusedSession();
@@ -408,8 +492,15 @@ function App() {
       {/* Detail panel — focused session info, fixed height */}
       <Show when={focusedData()}>
         {(data) => (
-          <scrollbox maxHeight={10} flexShrink={0}>
-            <DetailPanel session={data()} theme={theme} statusColors={S} spinIdx={spinIdx} />
+          <scrollbox maxHeight={detailPanelHeight()} flexShrink={0}>
+            <DetailPanel
+              session={data()}
+              panelHeight={detailPanelHeight()}
+              theme={theme}
+              statusColors={S}
+              spinIdx={spinIdx}
+              onResize={resizeDetailPanel}
+            />
           </scrollbox>
         )}
       </Show>
@@ -424,6 +515,10 @@ function App() {
           <span style={{ fg: P().overlay1 }}>{" go  "}</span>
           <span style={{ fg: P().overlay0 }}>{"t"}</span>
           <span style={{ fg: P().overlay1 }}>{" theme"}</span>
+        </text>
+        <text>
+          <span style={{ fg: P().overlay0 }}>{"  ←→"}</span>
+          <span style={{ fg: P().overlay1 }}>{" detail"}</span>
         </text>
       </box>
 
@@ -555,9 +650,11 @@ function buildSparkline(timestamps: number[], width: number, windowMs: number = 
 
 interface DetailPanelProps {
   session: SessionData;
+  panelHeight: number;
   theme: Accessor<Theme>;
   statusColors: Accessor<Theme["status"]>;
   spinIdx: Accessor<number>;
+  onResize: (delta: -1 | 1) => void;
 }
 
 function DetailPanel(props: DetailPanelProps) {
@@ -588,10 +685,21 @@ function DetailPanel(props: DetailPanelProps) {
     <box flexDirection="column" flexShrink={0} paddingLeft={1}>
       <text style={{ fg: P().surface2 }}>{"─".repeat(26)}</text>
 
-      {/* Directory */}
-      <text truncate>
-        <span style={{ fg: P().overlay0, attributes: DIM }}>{truncDir()}</span>
-      </text>
+      {/* Directory + resize controls */}
+      <box flexDirection="row" paddingRight={1}>
+        <text truncate flexGrow={1}>
+          <span style={{ fg: P().overlay0, attributes: DIM }}>{truncDir()}</span>
+        </text>
+        <text onMouseDown={() => props.onResize(-1)}>
+          <span style={{ fg: P().overlay0 }}>-</span>
+        </text>
+        <text>
+          <span style={{ fg: P().overlay1 }}>{` ${props.panelHeight} `}</span>
+        </text>
+        <text onMouseDown={() => props.onResize(1)}>
+          <span style={{ fg: P().overlay0 }}>+</span>
+        </text>
+      </box>
 
       {/* Listening ports */}
       <Show when={props.session.ports?.length}>

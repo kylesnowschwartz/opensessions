@@ -23,6 +23,7 @@ export type { AgentWatcher, AgentWatcherContext } from "./contracts/agent-watche
 export { AgentTracker } from "./agents/tracker";
 export { AmpAgentWatcher } from "./agents/watchers/amp";
 export { ClaudeCodeAgentWatcher } from "./agents/watchers/claude-code";
+export { CodexAgentWatcher } from "./agents/watchers/codex";
 export { OpenCodeAgentWatcher } from "./agents/watchers/opencode";
 export { MuxRegistry } from "./mux/registry";
 export { detectMux } from "./mux/detect";

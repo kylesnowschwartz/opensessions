@@ -19,6 +19,7 @@ export interface AgentWatcherContext {
  * Implementations:
  *   - amp: watches ~/.local/share/amp/threads/*.json
  *   - claude-code: watches ~/.claude/projects/ JSONL files
+ *   - codex: watches ~/.codex/sessions/ JSONL transcripts
  *   - opencode: polls OpenCode SQLite database
  *
  * To add a new watcher:

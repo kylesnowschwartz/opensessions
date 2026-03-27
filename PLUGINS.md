@@ -1,135 +1,82 @@
-# PLUGINS.md — Creating & Publishing Plugins
+# How To Build Plugins For opensessions
 
-opensessions uses a factory-based plugin system inspired by [pi-mono](https://github.com/badlogic/pi-mono). A plugin is a TypeScript file that exports a single default function.
+opensessions loads extension code as default-exported factory functions. Those factories can register mux providers, agent watchers, or both.
 
-## Plugin Contract
+This guide is intentionally task-oriented. For the exact TypeScript contracts, see [CONTRACTS.md](./CONTRACTS.md).
 
-Every plugin exports one function:
+## Before You Start
 
-```typescript
+The easiest way to iterate is with a local plugin in `~/.config/opensessions/plugins/`. Package-based plugins are supported too, but local files remove package resolution friction while you are developing. Amp, Claude Code, Codex, and OpenCode already ship as built-in watchers, so plugins are only needed for additional agents or mux providers.
+
+Every plugin exports a default function:
+
+```ts
 import type { PluginAPI } from "@opensessions/core";
 
 export default function (api: PluginAPI) {
-  // Register a mux provider, agent watcher, or do other setup
 }
 ```
 
-The `PluginAPI` gives you:
+The runtime passes:
 
-| Method / Property | Description |
-|---|---|
-| `api.registerMux(provider)` | Register a `MuxProvider` implementation |
-| `api.registerWatcher(watcher)` | Register an `AgentWatcher` implementation |
-| `api.serverPort` | The server port (default: `7391`) |
-| `api.serverHost` | The server host (default: `127.0.0.1`) |
+| Property | Meaning |
+| --- | --- |
+| `registerMux(provider)` | Register a mux provider |
+| `registerWatcher(watcher)` | Register an agent watcher |
+| `serverHost` | Current server host, currently `127.0.0.1` |
+| `serverPort` | Current server port, currently `7391` |
 
----
+## How Plugins Are Loaded
 
-## How Plugins Are Discovered
+The server loads extensions in this order:
 
-opensessions loads plugins in order:
+1. Built-in mux providers from `@opensessions/mux-tmux` and `@opensessions/mux-zellij`
+2. Local plugins from `~/.config/opensessions/plugins/`
+3. Package names listed in `~/.config/opensessions/config.json`
 
-1. **Builtins** — `TmuxProvider` is always registered. Built-in agent watchers for Amp, Claude Code, and OpenCode are registered automatically.
-2. **Local plugins** — `~/.config/opensessions/plugins/*.ts` (scanned one level deep)
-3. **npm packages** — listed in `~/.config/opensessions/config.json` under `"plugins"`
+Local plugin discovery supports:
 
-### Local Plugin Directory
-
-Drop a `.ts` or `.js` file into `~/.config/opensessions/plugins/`:
-
-```
+```text
 ~/.config/opensessions/
-├── config.json
-└── plugins/
-    ├── my-zellij.ts          ← loaded directly
-    └── my-custom-mux/
-        └── index.ts          ← loaded as entry point
+  config.json
+  plugins/
+    my-plugin.ts
+    another-plugin.js
+    custom-provider/
+      index.ts
 ```
 
-### npm Packages
+Package-based plugins are loaded through `require()`, so they must be resolvable from the opensessions runtime environment.
 
-Add package names to your config:
+## How To Create A Local Mux Plugin
 
-```json
-{
-  "plugins": ["opensessions-mux-zellij", "opensessions-agent-aider"]
-}
-```
+### 1. Create the plugin file
 
-These are loaded via `require()` — install them first with `bun add -g <package>`.
+Create `~/.config/opensessions/plugins/my-mux.ts`:
 
----
-
-## Config File
-
-`~/.config/opensessions/config.json`
-
-```json
-{
-  "mux": "tmux",
-  "plugins": [],
-  "port": 7391
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `mux` | `string?` | Override auto-detect. Use a registered provider name. |
-| `plugins` | `string[]` | npm package names to load |
-| `port` | `number?` | Custom server port (default: `7391`) |
-
-If `mux` is omitted, opensessions auto-detects from environment:
-- `$TMUX` → tmux
-- `$ZELLIJ_SESSION_NAME` → zellij (if a provider is registered)
-
----
-
-## Creating a Mux Provider Plugin
-
-### 1. Scaffold
-
-```bash
-mkdir opensessions-mux-zellij && cd opensessions-mux-zellij
-bun init
-bun add @opensessions/core
-```
-
-### 2. Implement
-
-```typescript
-// index.ts
+```ts
 import type { PluginAPI, MuxProvider, MuxSessionInfo } from "@opensessions/core";
 
-class ZellijProvider implements MuxProvider {
-  readonly name = "zellij";
+class MyMuxProvider implements MuxProvider {
+  readonly specificationVersion = "v1" as const;
+  readonly name = "my-mux";
 
   listSessions(): MuxSessionInfo[] {
-    const result = Bun.spawnSync(["zellij", "list-sessions", "-s"], {
-      stdout: "pipe", stderr: "pipe",
-    });
-    const raw = result.stdout.toString().trim();
-    if (!raw) return [];
-    return raw.split("\n").map((name) => ({
-      name: name.trim(),
-      createdAt: 0,
-      dir: "",
-      windows: 1,
-    }));
+    return [];
   }
 
-  switchSession(name: string): void {
-    Bun.spawnSync(["zellij", "attach", name]);
+  switchSession(name: string, clientTty?: string): void {
   }
 
   getCurrentSession(): string | null {
-    return process.env.ZELLIJ_SESSION_NAME ?? null;
+    return null;
   }
 
-  getSessionDir(_name: string): string {
-    return process.cwd();
+  getSessionDir(name: string): string {
+    return "";
   }
 
-  getPaneCount(_name: string): number {
+  getPaneCount(name: string): number {
     return 1;
   }
 
@@ -137,134 +84,65 @@ class ZellijProvider implements MuxProvider {
     return "";
   }
 
+  createSession(name?: string, dir?: string): void {
+  }
+
+  killSession(name: string): void {
+  }
+
   setupHooks(serverHost: string, serverPort: number): void {
-    // Set up zellij event hooks that POST to the server
   }
 
   cleanupHooks(): void {
-    // Remove hooks
   }
 }
 
 export default function (api: PluginAPI) {
-  api.registerMux(new ZellijProvider());
+  api.registerMux(new MyMuxProvider());
 }
 ```
 
-### 3. Configure `package.json`
+### 2. Select it in config if needed
+
+If your runtime could detect multiple providers, pin your choice in `~/.config/opensessions/config.json`:
 
 ```json
 {
-  "name": "opensessions-mux-zellij",
-  "version": "1.0.0",
-  "type": "module",
-  "main": "index.ts",
-  "opensessions": {
-    "type": "mux-provider"
-  },
-  "peerDependencies": {
-    "@opensessions/core": ">=0.1.0"
-  }
+  "mux": "my-mux",
+  "plugins": []
 }
 ```
 
-### 4. Test locally
+### 3. Start opensessions and verify registration
 
-Drop it in your plugins directory:
+Run the TUI or server. If your provider resolves successfully, it becomes part of the combined session list.
 
-```bash
-# Symlink for development
-ln -s $(pwd) ~/.config/opensessions/plugins/opensessions-mux-zellij
-```
+## How To Create An Agent Watcher Plugin
 
-Or add to config:
+### 1. Create the watcher file
 
-```json
-{
-  "plugins": ["./path/to/opensessions-mux-zellij"]
-}
-```
+Create `~/.config/opensessions/plugins/my-agent.ts`:
 
-### 5. Publish
-
-```bash
-npm publish
-# Users install with:
-bun add -g opensessions-mux-zellij
-```
-
-Then add to their config:
-
-```json
-{
-  "mux": "zellij",
-  "plugins": ["opensessions-mux-zellij"]
-}
-```
-
----
-
-## Creating an Agent Watcher Plugin
-
-Built-in watchers handle Amp, Claude Code, and OpenCode automatically. For other agents (e.g. Aider, Goose, custom agents), create a watcher plugin.
-
-### AgentWatcher Interface
-
-```typescript
-interface AgentWatcher {
-  /** Unique name for this watcher (e.g. "aider") */
-  readonly name: string;
-
-  /** Start watching. Called once by the server with the watcher context. */
-  start(ctx: AgentWatcherContext): void;
-
-  /** Stop watching and clean up resources. */
-  stop(): void;
-}
-```
-
-### AgentWatcherContext
-
-The server provides a context object so watchers can resolve sessions and emit events without knowing about server internals:
-
-```typescript
-interface AgentWatcherContext {
-  /** Resolve a project directory path to a mux session name, or null if unmatched */
-  resolveSession(projectDir: string): string | null;
-
-  /** Emit an agent event (applied to tracker + broadcast automatically) */
-  emit(event: AgentEvent): void;
-}
-```
-
-### Example: Aider Watcher
-
-```typescript
-// index.ts
-import type { PluginAPI, AgentWatcher, AgentWatcherContext, AgentEvent } from "@opensessions/core";
+```ts
+import type { PluginAPI, AgentWatcher, AgentWatcherContext } from "@opensessions/core";
 import { watch } from "fs";
 
-class AiderAgentWatcher implements AgentWatcher {
-  readonly name = "aider";
+class MyAgentWatcher implements AgentWatcher {
+  readonly name = "my-agent";
   private watcher: ReturnType<typeof watch> | null = null;
 
   start(ctx: AgentWatcherContext): void {
-    // Watch aider's log/state files for activity
-    const logDir = `${process.env.HOME}/.aider/logs`;
-
-    this.watcher = watch(logDir, { recursive: true }, (_eventType, filename) => {
-      if (!filename) return;
-
-      // Extract project directory from the log path
-      const projectDir = this.extractProjectDir(filename);
-      const session = ctx.resolveSession(projectDir);
+    this.watcher = watch("/tmp/my-agent", () => {
+      const session = ctx.resolveSession("/path/to/project");
       if (!session) return;
 
       ctx.emit({
-        agent: "aider",
+        agent: this.name,
         session,
         status: "running",
         ts: Date.now(),
+        threadId: "example-thread",
+        threadName: "Example task",
       });
     });
   }
@@ -273,56 +151,80 @@ class AiderAgentWatcher implements AgentWatcher {
     this.watcher?.close();
     this.watcher = null;
   }
-
-  private extractProjectDir(filename: string): string {
-    // Parse aider's log filename to determine project directory
-    return filename.replace(/\.log$/, "");
-  }
 }
 
 export default function (api: PluginAPI) {
-  api.registerWatcher(new AiderAgentWatcher());
+  api.registerWatcher(new MyAgentWatcher());
 }
 ```
 
-### Watcher Lifecycle
+### 2. Map agent state to session directories
 
-1. The plugin factory registers the watcher via `api.registerWatcher()`
-2. The server calls `watcher.start(ctx)` after all plugins are loaded
-3. The watcher uses `ctx.resolveSession(projectDir)` to map project directories to mux session names
-4. The watcher uses `ctx.emit(event)` to report agent status changes
-5. On shutdown, the server calls `watcher.stop()` for cleanup
+Watchers should emit only after they can resolve a real project directory to a mux session with `ctx.resolveSession(projectDir)`.
 
----
+### 3. Emit stable instance identifiers
+
+If your agent can run multiple threads in one repo, include `threadId`. The tracker uses it to keep instances separate.
+
+## How To Package A Plugin
+
+Once the local version works, package it like any other Bun or TypeScript module.
+
+Suggested `package.json` shape:
+
+```json
+{
+  "name": "opensessions-mux-my-mux",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "peerDependencies": {
+    "@opensessions/core": ">=0.1.0"
+  }
+}
+```
+
+Then add it to config:
+
+```json
+{
+  "mux": "my-mux",
+  "plugins": ["opensessions-mux-my-mux"]
+}
+```
+
+## How To Test Plugin Loading Quickly
+
+### Local file plugin
+
+1. Write the file under `~/.config/opensessions/plugins/`.
+2. Start `cd /path/to/opensessions/packages/tui && bun run start`.
+3. Confirm your provider or watcher behavior in the sidebar.
+
+### Linked package plugin
+
+1. Create the package elsewhere.
+2. Link or install it so Bun can resolve it from the opensessions runtime.
+3. Add the package name to `plugins` in config.
 
 ## Naming Conventions
 
-| Type | Pattern | Example |
-|---|---|---|
-| Mux provider | `opensessions-mux-<name>` | `opensessions-mux-zellij` |
-| Agent watcher | `opensessions-agent-<name>` | `opensessions-agent-aider` |
-| Theme | `opensessions-theme-<name>` | `opensessions-theme-nord` |
+These are conventions, not runtime requirements:
 
----
+| Plugin type | Common name pattern |
+| --- | --- |
+| Mux provider | `opensessions-mux-<name>` |
+| Agent watcher | `opensessions-agent-<name>` |
 
-## Setup Guide
+## Practical Notes
 
-### tmux + opensessions
+- Local plugins can be `.ts` or `.js` files.
+- Directory plugins need an `index.ts` or `index.js` entrypoint.
+- The current runtime passes fixed server host and port values through `PluginAPI`.
+- Built-in watchers already cover Amp, Claude Code, and OpenCode, so new watcher work is usually for unsupported agents.
 
-opensessions works with tmux out of the box — no plugin needed:
+## Related Docs
 
-```bash
-# Inside a tmux session:
-cd opensessions && bun install
-cd packages/tui && bun run start
-```
-
-The server auto-detects tmux from the `$TMUX` environment variable, registers session hooks via `tmux set-hook`, and starts broadcasting state over WebSocket.
-
-### Connecting an AI Agent
-
-**Amp, Claude Code, and OpenCode** work out of the box — built-in watchers detect their activity automatically. No plugins or configuration needed.
-
-For **other agents** (Aider, Goose, custom agents, etc.), create an agent watcher plugin and register it via `api.registerWatcher()`. See [Creating an Agent Watcher Plugin](#creating-an-agent-watcher-plugin) above.
-
-See [CONTRACTS.md](./CONTRACTS.md) for the `AgentEvent` schema and `AgentStatus` values.
+- Exact contracts: [CONTRACTS.md](./CONTRACTS.md)
+- Runtime behavior: [docs/explanation/architecture.md](./docs/explanation/architecture.md)
+- User configuration: [docs/reference/configuration.md](./docs/reference/configuration.md)

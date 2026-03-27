@@ -84,11 +84,13 @@ export class AgentTracker {
   getAgents(session: string): AgentEvent[] {
     const sessionInstances = this.instances.get(session);
     if (!sessionInstances) return [];
-    return [...sessionInstances.values()].map((event) => {
-      const key = instanceKey(event);
-      const isUnseen = this.unseenInstances.has(this.unseenKey(session, key));
-      return isUnseen ? { ...event, unseen: true } : event;
-    });
+    return [...sessionInstances.values()]
+      .map((event) => {
+        const key = instanceKey(event);
+        const isUnseen = this.unseenInstances.has(this.unseenKey(session, key));
+        return isUnseen ? { ...event, unseen: true } : event;
+      })
+      .sort((a, b) => b.ts - a.ts);
   }
 
   /** Returns recent event timestamps for sparkline rendering */
