@@ -5,7 +5,7 @@
 # Designed to be called from a zellij keybinding. Add to ~/.config/zellij/config.kdl:
 #
 #   bind "s" {
-#     Run "bash" "${OPENSESSIONS_DIR}/tmux-plugin/scripts/zellij-toggle.sh" {
+#     Run "bash" "${OPENSESSIONS_DIR}/integrations/tmux-plugin/scripts/zellij-toggle.sh" {
 #       close_on_exit true
 #     };
 #     SwitchToMode "Normal";
@@ -16,9 +16,9 @@ set -euo pipefail
 PORT="${OPENSESSIONS_PORT:-7391}"
 HOST="${OPENSESSIONS_HOST:-127.0.0.1}"
 
-OPENSESSIONS_DIR="${OPENSESSIONS_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
+OPENSESSIONS_DIR="${OPENSESSIONS_DIR:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 BUN_PATH="${BUN_PATH:-$(command -v bun 2>/dev/null || echo "$HOME/.bun/bin/bun")}"
-SERVER_ENTRY="$OPENSESSIONS_DIR/packages/core/src/server/start.ts"
+SERVER_ENTRY="$OPENSESSIONS_DIR/apps/server/src/main.ts"
 
 # --- Ensure server is running ---
 server_alive() {

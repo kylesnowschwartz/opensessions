@@ -4,9 +4,9 @@ PORT="${OPENSESSIONS_PORT:-7391}"
 HOST="${OPENSESSIONS_HOST:-127.0.0.1}"
 
 PLUGIN_DIR="$(tmux show-environment -g OPENSESSIONS_DIR 2>/dev/null | cut -d= -f2)"
-PLUGIN_DIR="${PLUGIN_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+PLUGIN_DIR="${PLUGIN_DIR:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 BUN_PATH="${BUN_PATH:-$(command -v bun 2>/dev/null || echo "$HOME/.bun/bin/bun")}"
-SERVER_ENTRY="$PLUGIN_DIR/packages/core/src/server/start.ts"
+SERVER_ENTRY="$PLUGIN_DIR/apps/server/src/main.ts"
 
 server_alive() {
   curl -s -o /dev/null -m 0.2 "http://${HOST}:${PORT}/" 2>/dev/null

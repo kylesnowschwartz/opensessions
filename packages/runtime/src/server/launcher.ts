@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 import { connect } from "net";
 import { SERVER_PORT, SERVER_HOST, PID_FILE } from "../shared";
 
@@ -21,11 +22,16 @@ async function isPortOpen(host: string, port: number, timeoutMs = 200): Promise<
 }
 
 function resolveServerEntryPath(): string {
-  const fromMeta = new URL("./start.ts", import.meta.url).pathname;
-  if (existsSync(fromMeta)) return fromMeta;
-  const fromDist = new URL("../src/server/start.ts", import.meta.url).pathname;
-  if (existsSync(fromDist)) return fromDist;
-  return fromMeta;
+  const envDir = process.env.OPENSESSIONS_DIR;
+  if (envDir) {
+    const fromEnv = join(envDir, "apps", "server", "src", "main.ts");
+    if (existsSync(fromEnv)) return fromEnv;
+  }
+
+  const fromWorkspace = new URL("../../../../apps/server/src/main.ts", import.meta.url).pathname;
+  if (existsSync(fromWorkspace)) return fromWorkspace;
+
+  return fromWorkspace;
 }
 
 export async function ensureServer(): Promise<void> {

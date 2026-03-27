@@ -277,8 +277,8 @@ export class ZellijProvider implements MuxProviderV1, WindowCapable, SidebarCapa
     position: SidebarPosition,
     scriptsDir: string,
   ): string | null {
-    // Resolve paths — scriptsDir = .../tmux-plugin/scripts
-    const pluginDir = scriptsDir.replace(/\/tmux-plugin\/scripts$/, "");
+    // Resolve paths — scriptsDir = .../apps/tui/scripts
+    const repoDir = scriptsDir.replace(/\/apps\/tui\/scripts$/, "");
     const startScript = `${scriptsDir}/start.sh`;
 
     // Zellij only supports -d right|down for new-pane.
@@ -287,7 +287,7 @@ export class ZellijProvider implements MuxProviderV1, WindowCapable, SidebarCapa
       "-d", "right",
       "-n", "opensessions",
       "--close-on-exit",
-      "--cwd", `${pluginDir}/packages/tui`,
+      "--cwd", `${repoDir}/apps/tui`,
       "--", "bash", startScript,
     ]);
 

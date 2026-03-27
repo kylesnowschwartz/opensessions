@@ -11,7 +11,7 @@ The easiest way to iterate is with a local plugin in `~/.config/opensessions/plu
 Every plugin exports a default function:
 
 ```ts
-import type { PluginAPI } from "@opensessions/core";
+import type { PluginAPI } from "@opensessions/runtime";
 
 export default function (api: PluginAPI) {
 }
@@ -55,7 +55,7 @@ Package-based plugins are loaded through `require()`, so they must be resolvable
 Create `~/.config/opensessions/plugins/my-mux.ts`:
 
 ```ts
-import type { PluginAPI, MuxProvider, MuxSessionInfo } from "@opensessions/core";
+import type { PluginAPI, MuxProvider, MuxSessionInfo } from "@opensessions/runtime";
 
 class MyMuxProvider implements MuxProvider {
   readonly specificationVersion = "v1" as const;
@@ -124,7 +124,7 @@ Run the TUI or server. If your provider resolves successfully, it becomes part o
 Create `~/.config/opensessions/plugins/my-agent.ts`:
 
 ```ts
-import type { PluginAPI, AgentWatcher, AgentWatcherContext } from "@opensessions/core";
+import type { PluginAPI, AgentWatcher, AgentWatcherContext } from "@opensessions/runtime";
 import { watch } from "fs";
 
 class MyAgentWatcher implements AgentWatcher {
@@ -179,7 +179,7 @@ Suggested `package.json` shape:
   "type": "module",
   "main": "index.ts",
   "peerDependencies": {
-    "@opensessions/core": ">=0.1.0"
+    "@opensessions/runtime": ">=0.1.0"
   }
 }
 ```
@@ -198,7 +198,7 @@ Then add it to config:
 ### Local file plugin
 
 1. Write the file under `~/.config/opensessions/plugins/`.
-2. Start `cd /path/to/opensessions/packages/tui && bun run start`.
+2. Start `cd /path/to/opensessions/apps/tui && bun run start` or run `bun run start:tui` from the repo root.
 3. Confirm your provider or watcher behavior in the sidebar.
 
 ### Linked package plugin

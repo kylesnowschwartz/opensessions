@@ -112,7 +112,7 @@ interface AgentWatcherContext {
 ### Minimal Watcher Example
 
 ```ts
-import type { AgentWatcher, AgentWatcherContext } from "@opensessions/core";
+import type { AgentWatcher, AgentWatcherContext } from "@opensessions/runtime";
 
 export class MyAgentWatcher implements AgentWatcher {
   readonly name = "my-agent";

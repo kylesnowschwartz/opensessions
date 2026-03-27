@@ -10,31 +10,35 @@
         "typescript": "^5",
       },
     },
-    "integrations/zellij": {
-      "name": "@opensessions/zellij",
+    "apps/server": {
+      "name": "@opensessions/server",
       "version": "0.1.0",
       "dependencies": {
-        "@opensessions/core": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-        "typescript": "^5",
-      },
-    },
-    "packages/core": {
-      "name": "@opensessions/core",
-      "version": "0.1.0",
-      "dependencies": {
-        "@opensessions/mux": "workspace:*",
-      },
-      "devDependencies": {
         "@opensessions/mux-tmux": "workspace:*",
         "@opensessions/mux-zellij": "workspace:*",
+        "@opensessions/runtime": "workspace:*",
+      },
+      "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5",
       },
     },
-    "packages/mux": {
+    "apps/tui": {
+      "name": "@opensessions/tui",
+      "version": "0.1.0",
+      "dependencies": {
+        "@opensessions/mux-tmux": "workspace:*",
+        "@opensessions/runtime": "workspace:*",
+        "@opentui/core": "^0.1.88",
+        "@opentui/solid": "^0.1.88",
+        "solid-js": "^1.9.11",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5",
+      },
+    },
+    "packages/mux/contract": {
       "name": "@opensessions/mux",
       "version": "0.1.0",
       "devDependencies": {
@@ -42,7 +46,7 @@
         "typescript": "^5",
       },
     },
-    "packages/mux-tmux": {
+    "packages/mux/providers/tmux": {
       "name": "@opensessions/mux-tmux",
       "version": "0.1.0",
       "dependencies": {
@@ -53,7 +57,7 @@
         "typescript": "^5",
       },
     },
-    "packages/mux-zellij": {
+    "packages/mux/providers/zellij": {
       "name": "@opensessions/mux-zellij",
       "version": "0.1.0",
       "dependencies": {
@@ -64,7 +68,7 @@
         "typescript": "^5",
       },
     },
-    "packages/tmux-sdk": {
+    "packages/mux/tmux-sdk": {
       "name": "@opensessions/tmux-sdk",
       "version": "0.1.0",
       "devDependencies": {
@@ -72,29 +76,11 @@
         "typescript": "^5",
       },
     },
-    "packages/tui": {
-      "name": "@opensessions/tui",
+    "packages/runtime": {
+      "name": "@opensessions/runtime",
       "version": "0.1.0",
       "dependencies": {
-        "@opensessions/core": "workspace:*",
         "@opensessions/mux": "workspace:*",
-        "@opensessions/mux-tmux": "workspace:*",
-        "@opensessions/mux-zellij": "workspace:*",
-        "@opentui/core": "^0.1.88",
-        "@opentui/solid": "^0.1.88",
-        "solid-js": "^1.9.11",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-        "typescript": "^5",
-      },
-    },
-    "tmux-plugin": {
-      "name": "@opensessions/tmux",
-      "version": "0.1.0",
-      "dependencies": {
-        "@opensessions/core": "workspace:*",
-        "@opensessions/tmux-sdk": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -227,21 +213,19 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@opensessions/core": ["@opensessions/core@workspace:packages/core"],
+    "@opensessions/mux": ["@opensessions/mux@workspace:packages/mux/contract"],
 
-    "@opensessions/mux": ["@opensessions/mux@workspace:packages/mux"],
+    "@opensessions/mux-tmux": ["@opensessions/mux-tmux@workspace:packages/mux/providers/tmux"],
 
-    "@opensessions/mux-tmux": ["@opensessions/mux-tmux@workspace:packages/mux-tmux"],
+    "@opensessions/mux-zellij": ["@opensessions/mux-zellij@workspace:packages/mux/providers/zellij"],
 
-    "@opensessions/mux-zellij": ["@opensessions/mux-zellij@workspace:packages/mux-zellij"],
+    "@opensessions/runtime": ["@opensessions/runtime@workspace:packages/runtime"],
 
-    "@opensessions/tmux": ["@opensessions/tmux@workspace:tmux-plugin"],
+    "@opensessions/server": ["@opensessions/server@workspace:apps/server"],
 
-    "@opensessions/tmux-sdk": ["@opensessions/tmux-sdk@workspace:packages/tmux-sdk"],
+    "@opensessions/tmux-sdk": ["@opensessions/tmux-sdk@workspace:packages/mux/tmux-sdk"],
 
-    "@opensessions/tui": ["@opensessions/tui@workspace:packages/tui"],
-
-    "@opensessions/zellij": ["@opensessions/zellij@workspace:integrations/zellij"],
+    "@opensessions/tui": ["@opensessions/tui@workspace:apps/tui"],
 
     "@opentui/core": ["@opentui/core@0.1.90", "", { "dependencies": { "bun-ffi-structs": "0.1.2", "diff": "8.0.2", "jimp": "1.6.0", "marked": "17.0.1", "yoga-layout": "3.2.1" }, "optionalDependencies": { "@dimforge/rapier2d-simd-compat": "^0.17.3", "@opentui/core-darwin-arm64": "0.1.90", "@opentui/core-darwin-x64": "0.1.90", "@opentui/core-linux-arm64": "0.1.90", "@opentui/core-linux-x64": "0.1.90", "@opentui/core-win32-arm64": "0.1.90", "@opentui/core-win32-x64": "0.1.90", "bun-webgpu": "0.1.5", "planck": "^1.4.2", "three": "0.177.0" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-Os2dviqWVETU3kaK36lbSvdcI93GAWhw0xb9ng/d0DWYuM9scRmAhLHiOayp61saWv/BR8OJXeuQYHvrp5rd6A=="],
 

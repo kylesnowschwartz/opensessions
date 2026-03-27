@@ -19,7 +19,7 @@
 #   @opensessions-width     "26"   — sidebar width in columns
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPTS_DIR="$CURRENT_DIR/tmux-plugin/scripts"
+SCRIPTS_DIR="$CURRENT_DIR/integrations/tmux-plugin/scripts"
 
 # --- Read user options with defaults ---
 
@@ -98,7 +98,7 @@ tmux set-environment -g OPENSESSIONS_DIR "$CURRENT_DIR"
 tmux set-environment -g OPENSESSIONS_WIDTH "$WIDTH"
 
 # --- Bootstrap: install deps if needed ---
-if [ ! -d "$CURRENT_DIR/packages/tui/node_modules" ]; then
+if [ ! -d "$CURRENT_DIR/node_modules" ]; then
   BUN_PATH="$(command -v bun 2>/dev/null || echo "$HOME/.bun/bin/bun")"
   if [ -x "$BUN_PATH" ]; then
     (cd "$CURRENT_DIR" && "$BUN_PATH" install --frozen-lockfile 2>/tmp/opensessions-install.log) &

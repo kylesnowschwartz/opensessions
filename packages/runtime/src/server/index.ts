@@ -235,12 +235,12 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   let sidebarPosition: "left" | "right" = config.sidebarPosition ?? "left";
   let sidebarVisible = false;
 
-  // scriptsDir is resolved from the OPENSESSIONS_DIR env var or fallback
+  // The sidebar launcher lives with the TUI app, not the tmux integration layer.
   const scriptsDir = (() => {
     const envDir = process.env.OPENSESSIONS_DIR;
-    if (envDir) return join(envDir, "tmux-plugin", "scripts");
+    if (envDir) return join(envDir, "apps", "tui", "scripts");
     // Fallback: relative to this file
-    return join(import.meta.dir, "..", "..", "..", "tmux-plugin", "scripts");
+    return join(import.meta.dir, "..", "..", "..", "..", "apps", "tui", "scripts");
   })();
 
   log("server", "config loaded", {

@@ -11,15 +11,15 @@ It is easiest to think about it as four pieces:
 
 ## Startup Flow
 
-When the TUI starts, it first calls `ensureServer()` from `@opensessions/core`.
+When the TUI starts, it first calls `ensureServer()` from `@opensessions/runtime`.
 
-If no healthy server is listening on `127.0.0.1:7391`, `ensureServer()` launches `packages/core/src/server/start.ts` in the background. The server then:
+If no healthy server is listening on `127.0.0.1:7391`, `ensureServer()` launches `apps/server/src/main.ts` in the background. The server then:
 
 1. loads config from `~/.config/opensessions/config.json`
-2. registers the built-in mux providers, with tmux as the only supported one today
+2. dynamically registers the built-in mux providers from `@opensessions/mux-tmux` and `@opensessions/mux-zellij`
 3. loads local plugins and configured package plugins
 4. resolves the primary mux provider
-5. registers the built-in Amp, Claude Code, and OpenCode watchers
+5. registers the built-in Amp, Claude Code, Codex, and OpenCode watchers
 6. starts the WebSocket and HTTP control server
 
 ## State Assembly
@@ -72,7 +72,8 @@ Notable design choices:
 - tmux global hooks notify the server about focus changes, session creation, window changes, and resize events
 - hidden sidebars are moved into a dedicated stash session named `_os_stash` instead of being destroyed
 - the TUI refocuses the main pane after capability detection to avoid escape-sequence leakage into the main pane
-- a small typed tmux SDK exists under `packages/tmux-sdk` for lower-level command work
+- a small typed tmux SDK exists under `packages/mux/tmux-sdk` for lower-level command work
+- the tmux integration scripts live under `integrations/tmux-plugin`, while the sidebar launcher itself lives with the TUI app in `apps/tui/scripts/start.sh`
 
 ## Experimental Providers
 
@@ -110,11 +111,11 @@ Some pieces are intentionally still narrow in scope:
 
 ## Why The Codebase Is Split This Way
 
-The package split is mostly about keeping the core extension contracts reusable:
+The repository now follows a clearer monorepo boundary model:
 
-- `@opensessions/core` defines the runtime model
-- `@opensessions/mux` defines mux contracts without forcing a concrete implementation
-- `@opensessions/mux-tmux` provides the current reference provider
-- `@opensessions/tui` stays focused on rendering and input
+- `apps/*` contains runnable entrypoints such as the server bootstrap and the TUI
+- `packages/runtime` contains reusable runtime logic that both apps depend on
+- `packages/mux/*` groups the mux contract, concrete mux providers, and the lower-level tmux SDK in one place
+- `integrations/tmux-plugin` contains host-specific tmux glue instead of runtime library code
 
-That makes it possible to extend opensessions without forking the server or TUI.
+That keeps entrypoints, reusable libraries, mux adapters, and host integrations separate enough that new contributors can tell what owns what at a glance.

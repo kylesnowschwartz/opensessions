@@ -5,7 +5,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { useKeyboard, useRenderer } from "@opentui/solid";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 
-import { ensureServer } from "@opensessions/core";
+import { ensureServer } from "@opensessions/runtime";
 import {
   type ServerMessage,
   type SessionData,
@@ -17,7 +17,7 @@ import {
   loadConfig,
   resolveTheme,
   saveConfig,
-} from "@opensessions/core";
+} from "@opensessions/runtime";
 import { TmuxClient } from "@opensessions/mux-tmux";
 
 // Detect which mux we're running inside

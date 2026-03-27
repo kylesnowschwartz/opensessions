@@ -10,6 +10,12 @@ It lives inside your existing tmux workflow instead of replacing it: one small p
 
 tmux is the only supported mux today. There is older zellij integration code in the repo, but it is not stable enough to document as supported; we are looking for maintainers who want to help bring it back to that bar.
 
+## Support Status
+
+- `@opensessions/mux-tmux` and the tmux plugin flow are supported.
+- `@opensessions/mux-zellij` is still experimental.
+- The repo is organized for contributors around runnable apps, reusable packages, and host integrations.
+
 ## Today
 
 - Live agent state across sessions for Amp, Claude Code, Codex, and OpenCode.
@@ -28,7 +34,7 @@ git clone https://github.com/Ataraxy-Labs/opensessions.git
 cd opensessions
 bun install
 bun test
-cd packages/tui && bun run start
+bun run start:tui
 ```
 
 That starts the sidebar client and auto-launches the server if needed.
@@ -56,14 +62,23 @@ For the full tmux workflow with keybindings and automatic pane management, wire 
 
 ## Repo Layout
 
-- `packages/core` — server, watcher logic, config, themes, ordering, plugins
-- `packages/tui` — OpenTUI sidebar client built with Solid
-- `packages/mux` — mux contracts and type guards
-- `packages/mux-tmux` — tmux provider
-- `packages/tmux-sdk` — lower-level typed tmux bindings
-- `tmux-plugin` — tmux-facing scripts and plugin entrypoint
+### Apps
 
-Experimental zellij work still exists under `packages/mux-zellij` and `integrations/zellij`, but it is outside the supported setup today.
+- `apps/server` — Bun server bootstrap that wires together built-in mux providers and agent watchers
+- `apps/tui` — OpenTUI sidebar client built with Solid, plus the canonical sidebar launcher script
+
+### Packages
+
+- `packages/runtime` — shared runtime logic: tracker, config, plugin loader, server internals, themes, ordering
+- `packages/mux/contract` — mux contracts and capability guards exposed as `@opensessions/mux`
+- `packages/mux/providers/tmux` — tmux provider exposed as `@opensessions/mux-tmux`
+- `packages/mux/providers/zellij` — experimental zellij provider exposed as `@opensessions/mux-zellij`
+- `packages/mux/tmux-sdk` — lower-level typed tmux bindings used by tmux-aware code
+
+### Integrations
+
+- `opensessions.tmux` — root TPM entrypoint for users
+- `integrations/tmux-plugin` — tmux-facing scripts and host integration glue
 
 ## Current Caveats
 
