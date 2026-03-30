@@ -49,9 +49,14 @@ const TOOL_USE_WAIT_MS = 3000;
 
 // --- Status detection ---
 
-export function determineStatus(entry: JournalEntry): AgentStatus {
+/**
+ * Returns the status implied by a journal entry, or `null` if the entry
+ * is a control/metadata record (e.g. `queue-operation`, `file-history-snapshot`,
+ * `last-prompt`) that should not change the current status.
+ */
+export function determineStatus(entry: JournalEntry): AgentStatus | null {
   const msg = entry.message;
-  if (!msg?.role) return "idle";
+  if (!msg?.role) return null; // control entry — skip
 
   const content = msg.content;
   const items: ContentItem[] = Array.isArray(content)
@@ -62,12 +67,16 @@ export function determineStatus(entry: JournalEntry): AgentStatus {
 
   if (msg.role === "assistant") {
     const hasToolUse = items.some((c) => c.type === "tool_use");
-    return hasToolUse ? "running" : "done";
+    if (hasToolUse) return "running";
+    // thinking-only entries (extended thinking) mean the model is still working
+    const hasThinking = items.some((c) => c.type === "thinking");
+    if (hasThinking) return "running";
+    return "done";
   }
 
   if (msg.role === "user") return "running";
 
-  return "idle";
+  return null; // unknown role — skip
 }
 
 /** Returns true if the entry is an assistant message containing a tool_use block */
@@ -184,7 +193,8 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
           const name = extractThreadName(entry);
           if (name) threadName = name;
         }
-        latestStatus = determineStatus(entry);
+        const s = determineStatus(entry);
+        if (s !== null) latestStatus = s;
         lastEntryIsToolUse = isToolUseEntry(entry);
       }
 
@@ -220,7 +230,8 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
         if (name) threadName = name;
       }
 
-      latestStatus = determineStatus(entry);
+      const s = determineStatus(entry);
+      if (s !== null) latestStatus = s;
       lastEntryIsToolUse = isToolUseEntry(entry);
     }
 

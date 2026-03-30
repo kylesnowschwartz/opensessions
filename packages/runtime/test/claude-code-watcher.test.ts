@@ -9,8 +9,14 @@ import type { AgentWatcherContext } from "../src/contracts/agent-watcher";
 // --- determineStatus ---
 
 describe("Claude Code determineStatus", () => {
-  test("returns idle for entry with no message", () => {
-    expect(determineStatus({})).toBe("idle");
+  test("returns null for entry with no message (control entry)", () => {
+    expect(determineStatus({})).toBeNull();
+  });
+
+  test("returns running for assistant with thinking only", () => {
+    expect(determineStatus({
+      message: { role: "assistant", content: [{ type: "thinking" }] },
+    })).toBe("running");
   });
 
   test("returns running for assistant with tool_use", () => {
