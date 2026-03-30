@@ -333,10 +333,19 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   const watcherCtx: AgentWatcherContext = {
     resolveSession(projectDir: string): string | null {
       const map = getDirSessionMap();
+      // Direct path match
       const direct = map.get(projectDir);
       if (direct) return direct;
+      // Substring match (parent/child directories)
       for (const [dir, name] of map) {
         if (projectDir.startsWith(dir + "/") || dir.startsWith(projectDir + "/")) return name;
+      }
+      // Encoded fallback: Claude Code's path encoding is lossy (/, ., _
+      // all become -), so the naive decode may produce a wrong path.
+      // Re-encode each session dir and compare to find the right match.
+      const projectDirEncoded = projectDir.replace(/\//g, "-");
+      for (const [dir, name] of map) {
+        if (dir.replace(/[/._]/g, "-") === projectDirEncoded) return name;
       }
       return null;
     },
