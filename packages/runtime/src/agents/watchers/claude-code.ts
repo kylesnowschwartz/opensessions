@@ -257,7 +257,8 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
     if (!this.ctx) return;
 
     let size: number;
-    try { size = (await stat(filePath)).size; } catch { return; }
+    let mtimeMs: number;
+    try { const s = await stat(filePath); size = s.size; mtimeMs = s.mtimeMs; } catch { return; }
 
     const threadId = basename(filePath, ".jsonl");
     const prev = this.sessions.get(threadId);
@@ -310,8 +311,8 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
 
       this.sessions.set(threadId, {
         status: latestStatus, fileSize: size, threadName, projectDir,
-        toolUseSeenAt: lastEntryIsToolUse && latestStatus === "running" ? Date.now() : undefined,
-        lastGrowthAt: (latestStatus === "running" || latestStatus === "waiting") ? Date.now() : undefined,
+        toolUseSeenAt: lastEntryIsToolUse && latestStatus === "running" ? mtimeMs : undefined,
+        lastGrowthAt: (latestStatus === "running" || latestStatus === "waiting") ? mtimeMs : undefined,
       });
       return;
     }
