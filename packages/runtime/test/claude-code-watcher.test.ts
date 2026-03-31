@@ -414,6 +414,50 @@ describe("ClaudeCodeAgentWatcher", () => {
     expect(doneEvents.length).toBeGreaterThanOrEqual(1);
   });
 
+  test("uses custom-title as threadName when present", async () => {
+    const projDir = join(tmpDir, "-projects-myapp");
+    mkdirSync(projDir, { recursive: true });
+
+    const filePath = join(projDir, "session-010.jsonl");
+    writeFileSync(filePath, [
+      JSON.stringify({ message: { role: "user", content: "fix the login bug" } }),
+      JSON.stringify({ type: "custom-title", customTitle: "login-fix", sessionId: "session-010" }),
+      JSON.stringify({ message: { role: "assistant", stop_reason: null, content: [{ type: "thinking" }] } }),
+    ].join("\n") + "\n");
+
+    watcher.start(ctx);
+    await watcher.flush();
+
+    const seedEvents = events.filter((e) => e.threadId === "session-010");
+    expect(seedEvents.length).toBeGreaterThanOrEqual(1);
+    expect(seedEvents[0]!.threadName).toBe("login-fix");
+  });
+
+  test("custom-title overrides first user message threadName", async () => {
+    const projDir = join(tmpDir, "-projects-myapp");
+    mkdirSync(projDir, { recursive: true });
+
+    // Seed with first user message as initial threadName
+    const filePath = join(projDir, "session-011.jsonl");
+    writeFileSync(filePath, [
+      JSON.stringify({ message: { role: "user", content: "fix the login bug" } }),
+      JSON.stringify({ message: { role: "assistant", stop_reason: null, content: [{ type: "thinking" }] } }),
+    ].join("\n") + "\n");
+
+    watcher.start(ctx);
+    await watcher.flush();
+    const seedCount = events.length;
+
+    // Append a custom-title entry mid-session
+    appendFileSync(filePath, JSON.stringify({ type: "custom-title", customTitle: "login-fix", sessionId: "session-011" }) + "\n");
+    // Need a status change to trigger emit, or the name change alone should trigger it
+    await watcher.flush();
+
+    const postSeed = events.slice(seedCount);
+    expect(postSeed.length).toBeGreaterThanOrEqual(1);
+    expect(postSeed[postSeed.length - 1]!.threadName).toBe("login-fix");
+  });
+
   test("keeps running during streaming partials (thinking -> text -> tool_use)", async () => {
     const projDir = join(tmpDir, "-projects-myapp");
     mkdirSync(projDir, { recursive: true });
