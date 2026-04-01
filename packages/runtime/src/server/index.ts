@@ -1437,7 +1437,8 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       }
 
       if (req.method === "POST" && url.pathname === "/restart") {
-        log("http", "POST /restart — spawning new server and exiting");
+        const skipReload = url.searchParams.get("reload-tui") === "false";
+        log("http", "POST /restart", { reloadTui: !skipReload });
         // Respond before shutting down so the caller gets confirmation
         setTimeout(() => {
           cleanup();
@@ -1449,7 +1450,11 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
           );
           const proc = Bun.spawn([process.execPath, "run", serverEntry], {
             stdio: ["ignore", "ignore", "ignore"],
-            env: { ...process.env },
+            env: {
+              ...process.env,
+              // Tell the new server to cycle sidebars after startup
+              OPENSESSIONS_RELOAD_TUI: skipReload ? "" : "1",
+            },
           });
           proc.unref();
           process.exit(0);
@@ -1657,6 +1662,20 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       sidebarVisible = true;
       log("bootstrap", "detected existing sidebar panes", { count: existingSidebars });
       enforceSidebarWidth();
+
+      // Reload TUI: cycle sidebars so they pick up new TUI bundle.
+      // Triggered by /restart (default) — opt out with ?reload-tui=false.
+      if (process.env.OPENSESSIONS_RELOAD_TUI === "1") {
+        delete process.env.OPENSESSIONS_RELOAD_TUI;
+        log("bootstrap", "reloading TUI — cycling sidebars");
+        // Brief delay so the server is fully ready before spawning new TUIs
+        setTimeout(() => {
+          toggleSidebar(); // off — hides existing panes
+          setTimeout(() => {
+            toggleSidebar(); // on — spawns fresh TUI processes with new code
+          }, 500);
+        }, 500);
+      }
     }
   }
 
