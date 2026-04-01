@@ -38,6 +38,7 @@ describe("registerHooks", () => {
     const entry = settings.hooks.UserPromptSubmit[0];
     expect(entry.hooks[0].type).toBe("command");
     expect(entry.hooks[0].command).toBe(`${hookScript} UserPromptSubmit`);
+    expect(entry.hooks[0].async).toBe(true);
   });
 
   test("preserves existing settings and hooks", () => {

@@ -85,13 +85,14 @@ function hasHookCommand(hooksMap: Record<string, any[]>, event: string, command:
   return false;
 }
 
-/** Append a hook command to the event's entry array. */
+/** Append a hook command to the event's entry array.
+ *  Hooks are async (fire-and-forget) — they must never block the agent. */
 function appendHook(hooksMap: Record<string, any[]>, event: string, command: string): void {
   if (!Array.isArray(hooksMap[event])) {
     hooksMap[event] = [];
   }
 
   hooksMap[event].push({
-    hooks: [{ type: "command", command }],
+    hooks: [{ type: "command", command, async: true }],
   });
 }
