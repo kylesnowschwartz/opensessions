@@ -16,11 +16,8 @@ export interface AgentWatcherContext {
  * Interface for agent watchers that detect agent status by watching
  * external data sources (thread files, databases, etc).
  *
- * Implementations:
- *   - amp: watches ~/.local/share/amp/threads/*.json
- *   - claude-code: watches ~/.claude/projects/ JSONL files
- *   - codex: watches ~/.codex/sessions/ JSONL transcripts
- *   - opencode: polls OpenCode SQLite database
+ * Built-in: ClaudeCodeHookAdapter receives lifecycle hooks via POST /hook.
+ * Community agents use the AgentWatcher plugin interface with file watching.
  *
  * To add a new watcher:
  *   1. Create a file implementing AgentWatcher
@@ -35,4 +32,28 @@ export interface AgentWatcher {
 
   /** Stop watching and clean up resources. */
   stop(): void;
+}
+
+// --- Hook-based detection ---
+
+/** Payload sent by Claude Code lifecycle hooks via POST /hook. */
+export interface HookPayload {
+  /** Hook event name: "UserPromptSubmit" | "PreToolUse" | "Stop" | "Notification" */
+  event: string;
+  /** Claude Code session UUID — used as threadId */
+  session_id: string;
+  /** Project directory the agent is working in */
+  cwd: string;
+  /** Tool name (PreToolUse only) */
+  tool_name?: string;
+}
+
+/** A watcher that can receive hook events pushed from the agent process. */
+export interface HookReceiver {
+  handleHook(payload: HookPayload): void;
+}
+
+/** Type guard: does this watcher accept hook payloads? */
+export function isHookReceiver(w: AgentWatcher): w is AgentWatcher & HookReceiver {
+  return typeof (w as any).handleHook === "function";
 }
