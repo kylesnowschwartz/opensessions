@@ -1637,6 +1637,21 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   // --- Bootstrap ---
 
   for (const p of allProviders) p.setupHooks(SERVER_HOST, SERVER_PORT);
+
+  // Detect pre-existing sidebar panes (e.g. after a server restart while
+  // TUI sidebars are still running and reconnecting)
+  {
+    let existingSidebars = 0;
+    for (const { panes } of listSidebarPanesByProvider()) {
+      existingSidebars += panes.length;
+    }
+    if (existingSidebars > 0) {
+      sidebarVisible = true;
+      log("bootstrap", "detected existing sidebar panes", { count: existingSidebars });
+      enforceSidebarWidth();
+    }
+  }
+
   // Seed port snapshot before first broadcast so clients see ports immediately
   {
     const allMuxSessions: string[] = [];
