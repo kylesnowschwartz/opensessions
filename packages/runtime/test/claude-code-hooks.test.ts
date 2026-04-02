@@ -135,13 +135,13 @@ describe("ClaudeCodeHookAdapter", () => {
     expect(ctx.events[0].status).toBe("waiting");
   });
 
-  test("Notification with idle_prompt emits waiting", () => {
+  test("Notification with idle_prompt emits done (idle at prompt, not waiting)", () => {
     adapter.handleHook(hook("Notification", "sess-1", "/tmp/myproject", {
       notification_type: "idle_prompt",
     } as any));
 
     expect(ctx.events).toHaveLength(1);
-    expect(ctx.events[0].status).toBe("waiting");
+    expect(ctx.events[0].status).toBe("done");
   });
 
   test("Notification without notification_type is ignored", () => {

@@ -143,7 +143,10 @@ interface ThreadState {
 const STALE_MS = 5 * 60 * 1000;
 
 /** Notification subtypes that indicate the user must act. */
-const WAITING_NOTIFICATION_TYPES = new Set(["permission_prompt", "idle_prompt"]);
+const WAITING_NOTIFICATION_TYPES = new Set(["permission_prompt"]);
+
+/** Notification subtypes that confirm the agent is idle at prompt (not waiting for input). */
+const IDLE_NOTIFICATION_TYPES = new Set(["idle_prompt"]);
 
 // --- Hook event → status mapping ---
 
@@ -222,6 +225,9 @@ export class ClaudeCodeHookAdapter implements AgentWatcher, HookReceiver {
     if (payload.event === "Notification") {
       if (payload.notification_type && WAITING_NOTIFICATION_TYPES.has(payload.notification_type)) {
         return "waiting";
+      }
+      if (payload.notification_type && IDLE_NOTIFICATION_TYPES.has(payload.notification_type)) {
+        return "done";
       }
       // Unknown or unhandled notification subtypes — ignore rather than guess
       return null;
