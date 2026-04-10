@@ -13,6 +13,7 @@ import { loadConfig, saveConfig } from "../config";
 import {
   clampSidebarWidth,
   MIN_SIDEBAR_WIDTH,
+  SAVE_DEBOUNCE_MS,
 } from "./sidebar-width-sync";
 import {
   type ServerState,
@@ -278,7 +279,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   // Load initial theme from config
   const config = loadConfig();
   let currentTheme: string | undefined = typeof config.theme === "string" ? config.theme : undefined;
-  let sidebarWidth = clampSidebarWidth(config.sidebarWidth ?? 26);
+  let configuredWidth = clampSidebarWidth(config.sidebarWidth ?? 26);
   let sidebarPosition: "left" | "right" = config.sidebarPosition ?? "left";
   let sidebarVisible = false;
 
@@ -291,7 +292,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   })();
 
   log("server", "config loaded", {
-    sidebarWidth, sidebarPosition, scriptsDir,
+    sidebarWidth: configuredWidth, sidebarPosition, scriptsDir,
     theme: currentTheme, configKeys: Object.keys(config),
   });
 
@@ -473,7 +474,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       focusedSession = sessions.find((s) => s.name === currentSession)?.name ?? sessions[0]!.name;
     }
 
-    return { type: "state", sessions, focusedSession, currentSession, theme: currentTheme, sidebarWidth, ts: Date.now() };
+    return { type: "state", sessions, focusedSession, currentSession, theme: currentTheme, sidebarWidth: configuredWidth, ts: Date.now() };
   }
 
   let broadcastPending = false;
@@ -729,9 +730,9 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     if (!hasInWindow) {
       invalidateSidebarPaneCache();
       pendingSidebarSpawns.add(spawnKey);
-      log("ensure", "SPAWNING sidebar", { curSession, windowId, sidebarWidth, sidebarPosition, scriptsDir });
+      log("ensure", "SPAWNING sidebar", { curSession, windowId, sidebarWidth: configuredWidth, sidebarPosition, scriptsDir });
       try {
-        const newPaneId = p.spawnSidebar(curSession, windowId, sidebarWidth, sidebarPosition, scriptsDir);
+        const newPaneId = p.spawnSidebar(curSession, windowId, configuredWidth, sidebarPosition, scriptsDir);
         log("ensure", "spawn result", { newPaneId });
         // Do NOT refocus the main pane here — the TUI handles it.
         // For fresh spawns, the TUI refocuses after capability detection.
@@ -790,8 +791,14 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   // or auto-expires after 500ms (in case no SIGWINCH fires, e.g. width didn't change).
   let pendingEnforcement = false;
   let pendingEnforcementTimer: ReturnType<typeof setTimeout> | null = null;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelPendingSave() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  }
 
   function setPendingEnforcement() {
+    cancelPendingSave();
     pendingEnforcement = true;
     if (pendingEnforcementTimer) clearTimeout(pendingEnforcementTimer);
     pendingEnforcementTimer = setTimeout(() => {
@@ -806,14 +813,14 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     invalidateSidebarPaneCache();
     for (const { provider, panes } of listSidebarPanesByProvider()) {
       for (const pane of panes) {
-        if (pane.width === sidebarWidth) {
+        if (pane.width === configuredWidth) {
           continue;
         }
         if (skipSession && pane.sessionName === skipSession) {
           continue;
         }
-        log("enforce", `${pane.paneId} ${pane.width}→${sidebarWidth}`);
-        provider.resizeSidebarPane(pane.paneId, sidebarWidth);
+        log("enforce", `${pane.paneId} ${pane.width}→${configuredWidth}`);
+        provider.resizeSidebarPane(pane.paneId, configuredWidth);
       }
     }
   }
@@ -1327,26 +1334,39 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
         if (!sidebarVisible) {
           break;
         }
-        const reported = clampSidebarWidth(cmd.width);
+        // Get window width from the reporting client's sidebar pane for the max clamp
         const session = clientSessionNames.get(ws) ?? null;
+        let windowWidth: number | undefined;
+        if (session) {
+          for (const { panes } of listSidebarPanesByProvider()) {
+            const pane = panes.find((p) => p.sessionName === session);
+            if (pane?.windowWidth) { windowWidth = pane.windowWidth; break; }
+          }
+        }
+        const reported = clampSidebarWidth(cmd.width, windowWidth);
         if (pendingEnforcement) {
           pendingEnforcement = false;
           enforceSidebarWidth();
           break;
         }
-        if (reported === sidebarWidth) {
+        if (reported === configuredWidth) {
           break;
         }
-        const oldWidth = sidebarWidth;
-        sidebarWidth = reported;
-        saveConfig({ sidebarWidth });
-        broadcastState();
-        enforceSidebarWidth(session ?? undefined);
+        // Debounce the save — if enforcement fires within the window, it was a reflow
+        cancelPendingSave();
+        saveTimer = setTimeout(() => {
+          saveTimer = null;
+          configuredWidth = reported;
+          saveConfig({ sidebarWidth: configuredWidth });
+          broadcastState();
+          enforceSidebarWidth(session ?? undefined);
+        }, SAVE_DEBOUNCE_MS);
         break;
       }
       case "equalize-width": {
-        sidebarWidth = MIN_SIDEBAR_WIDTH;
-        saveConfig({ sidebarWidth });
+        cancelPendingSave();
+        configuredWidth = MIN_SIDEBAR_WIDTH;
+        saveConfig({ sidebarWidth: configuredWidth });
         enforceSidebarWidth();
         broadcastState();
         break;
