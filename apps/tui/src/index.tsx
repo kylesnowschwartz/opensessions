@@ -248,7 +248,7 @@ function App() {
           h += wrapLines(sanitizeThreadName(agent.threadName));
         }
       }
-      if (agents.length > 1) h += agents.length - 1; // gap={1} between agents
+      // no gap between agents — card border provides visual grouping
 
       const meta = session.metadata;
       if (meta) {
@@ -1261,20 +1261,6 @@ function SessionCard(props: SessionCardProps) {
   const isUnseenTerminal = () =>
     unseen() && (label() === "stopped" || label() === "error");
 
-  const accentColor = () => {
-    if (props.isCurrent) return P().green;
-    if (isUnseenTerminal()) return unseenAccentColor();
-    const l = label();
-    if (l === "error") return P().red;
-    if (l === "working") return P().blue;
-    if (props.isFocused) return P().lavender;
-    return "transparent";
-  };
-
-  const unseenAccentColor = () => {
-    if (label() === "error") return P().red;
-    return P().teal;
-  };
 
   const statusIcon = () => {
     const l = label();
@@ -1285,7 +1271,7 @@ function SessionCard(props: SessionCardProps) {
   };
 
   const statusColor = () => {
-    if (isUnseenTerminal()) return unseenAccentColor();
+    if (isUnseenTerminal()) return label() === "error" ? P().red : P().teal;
     const l = label();
     if (l === "working") return P().blue;
     if (l === "waiting") return P().yellow;
@@ -1296,15 +1282,11 @@ function SessionCard(props: SessionCardProps) {
   };
 
   const nameColor = () => {
-    if (props.isFocused) return P().text;
     if (props.isCurrent) return P().subtext1;
     return P().subtext0;
   };
 
-  const indexColor = () => {
-    if (props.isFocused) return P().subtext0;
-    return P().surface2;
-  };
+  const indexColor = () => P().surface2;
 
   const truncName = () => {
     const n = props.session.name;
@@ -1359,10 +1341,7 @@ function SessionCard(props: SessionCardProps) {
 
   const metaTone = () => props.session.metadata?.status?.tone;
 
-  const bgColor = () => {
-    if (props.isFocused) return P().surface1;
-    return "transparent";
-  };
+  const bgColor = () => "transparent";
 
   // --- Expanded content helpers ---
   const dirParts = () => formatDir(props.session.dir);
@@ -1397,11 +1376,7 @@ function SessionCard(props: SessionCardProps) {
         flexDirection="row"
         backgroundColor={bgColor()}
         onMouseDown={props.onSelect}
-        paddingLeft={1}
       >
-        {/* Left accent — space-preserving, only colored for meaningful states */}
-        <text style={{ fg: accentColor() }}>{accentColor() === "transparent" ? " " : "▌"}</text>
-
         {/* Index */}
         <box width={3} flexShrink={0}>
           <text style={{ fg: indexColor() }}>{String(props.index).padStart(2)}</text>
@@ -1412,7 +1387,7 @@ function SessionCard(props: SessionCardProps) {
           {/* Row 1: name + agent badge (left) + status icons (right) */}
           <box flexDirection="row">
             <text truncate>
-              <span style={{ fg: nameColor(), attributes: props.isFocused || props.isCurrent ? BOLD : undefined }}>
+              <span style={{ fg: nameColor(), attributes: props.isCurrent ? BOLD : undefined }}>
                 {truncName()}
               </span>
               <Show when={agentBadge()}>
@@ -1459,7 +1434,7 @@ function SessionCard(props: SessionCardProps) {
 
       {/* Expanded detail — shown inline when focused */}
       <Show when={props.isFocused}>
-        <box flexDirection="column" paddingLeft={5}>
+        <box flexDirection="column" paddingLeft={1}>
           {/* Directory — only when cwd doesn't match session name */}
           <Show when={dirMismatch()}>
             <text truncate>
@@ -1507,7 +1482,7 @@ function SessionCard(props: SessionCardProps) {
 
           {/* Agent instances */}
           <Show when={agents().length > 0}>
-            <box flexDirection="column" gap={1}>
+            <box flexDirection="column">
               <For each={agents()}>
                 {(agent, i) => (
                   <AgentListItem
