@@ -1,9 +1,9 @@
 import { render } from "@opentui/solid";
 import { appendFileSync } from "fs";
-import { createSignal, createEffect, onCleanup, onMount, batch, For, Show, createMemo, createSelector, type Accessor } from "solid-js";
+import { createSignal, createEffect, on, onCleanup, onMount, batch, For, Show, createMemo, createSelector, type Accessor } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useKeyboard, useRenderer } from "@opentui/solid";
-import { TextAttributes, type MouseEvent, type InputRenderable, type KeyEvent } from "@opentui/core";
+import { TextAttributes, type InputRenderable, type KeyEvent } from "@opentui/core";
 
 import { ensureServer } from "@opensessions/runtime";
 import {
@@ -16,9 +16,7 @@ import {
   SERVER_PORT,
   SERVER_HOST,
   BUILTIN_THEMES,
-  loadConfig,
   resolveTheme,
-  saveConfig,
 } from "@opensessions/runtime";
 import { TmuxClient } from "@opensessions/mux-tmux";
 
@@ -51,9 +49,6 @@ const DIM = TextAttributes.DIM;
 const SPARK_BLOCKS = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 const THEME_NAMES = Object.keys(BUILTIN_THEMES);
-const DEFAULT_DETAIL_PANEL_HEIGHT = 10;
-const MIN_DETAIL_PANEL_HEIGHT = 4;
-const RESIZE_DEBUG_LOG = "/tmp/opensessions-tui-resize.log";
 
 const TONE_ICONS: Record<MetadataTone, string> = {
   neutral: "·",
@@ -99,33 +94,6 @@ function paletteToFzfColors(p: ThemePalette): string {
     `--color=border:${p.surface2},gutter:${p.base}`,
     `--color=query:${p.text},disabled:${p.overlay0}`,
   ].join(" ");
-}
-
-function logResizeDebug(message: string, data?: Record<string, unknown>): void {
-  const ts = new Date().toISOString();
-  const extra = data ? ` ${JSON.stringify(data)}` : "";
-  try {
-    appendFileSync(RESIZE_DEBUG_LOG, `[${ts}] [pid:${process.pid}] ${message}${extra}\n`);
-  } catch {}
-}
-
-function clampDetailPanelHeight(height: number): number {
-  return Math.max(MIN_DETAIL_PANEL_HEIGHT, Math.round(height));
-}
-
-function getStoredDetailPanelHeight(sessionName: string): number {
-  const stored = loadConfig().detailPanelHeights?.[sessionName];
-  return typeof stored === "number" ? clampDetailPanelHeight(stored) : DEFAULT_DETAIL_PANEL_HEIGHT;
-}
-
-function persistDetailPanelHeight(sessionName: string, height: number): void {
-  const config = loadConfig();
-  saveConfig({
-    detailPanelHeights: {
-      ...(config.detailPanelHeights ?? {}),
-      [sessionName]: clampDetailPanelHeight(height),
-    },
-  });
 }
 
 /** Refocus the main (non-sidebar) pane after TUI capability detection finishes.
@@ -203,10 +171,6 @@ function App() {
   const [mySession, setMySession] = createSignal<string | null>(null);
   const [connected, setConnected] = createSignal(false);
   const [spinIdx, setSpinIdx] = createSignal(0);
-  const [detailPanelHeight, setDetailPanelHeight] = createSignal(DEFAULT_DETAIL_PANEL_HEIGHT);
-  const [isDetailResizeHover, setIsDetailResizeHover] = createSignal(false);
-  const [isDetailResizing, setIsDetailResizing] = createSignal(false);
-  const detailPanelSessionName = createMemo(() => focusedSession() ?? mySession());
 
   // --- Panel focus: sessions list vs agent detail ---
   type PanelFocus = "sessions" | "agents";
@@ -230,9 +194,8 @@ function App() {
   const [clientTty, setClientTty] = createSignal(getClientTty());
   let ws: WebSocket | null = null;
   let startupFocusSynced = false;
-  let detailResizeStartY = 0;
-  let detailResizeStartHeight = DEFAULT_DETAIL_PANEL_HEIGHT;
   const startupSessionName = getLocalSessionName();
+  let scrollboxRef: any;
 
   const focusedData = createMemo(() =>
     sessions.find((s) => s.name === focusedSession()) ?? null,
@@ -337,100 +300,12 @@ function App() {
     });
   }
 
-  function togglePanelFocus() {
-    const data = focusedData();
-    const agents = data?.agents ?? [];
-    if (panelFocus() === "sessions" && agents.length > 0) {
-      setPanelFocus("agents");
-      setFocusedAgentIdx((idx) => Math.min(idx, agents.length - 1));
-    } else {
-      setPanelFocus("sessions");
-    }
-  }
-
   function applyTheme(themeName: string) {
     send({ type: "set-theme", theme: themeName });
   }
 
   function previewTheme(themeName: string) {
     setTheme(resolveTheme(themeName));
-  }
-
-  function resizeDetailPanel(delta: -1 | 1) {
-    const nextHeight = clampDetailPanelHeight(detailPanelHeight() + delta);
-    if (nextHeight === detailPanelHeight()) return;
-
-    setDetailPanelHeight(nextHeight);
-
-    const sessionName = detailPanelSessionName();
-    if (sessionName) {
-      persistDetailPanelHeight(sessionName, nextHeight);
-    }
-  }
-
-  function beginDetailResize(event: MouseEvent) {
-    logResizeDebug("beginDetailResize", {
-      button: event.button,
-      x: event.x,
-      y: event.y,
-      currentHeight: detailPanelHeight(),
-      session: detailPanelSessionName(),
-      target: event.target?.id ?? null,
-    });
-    if (event.button !== 0) return;
-    (renderer as any).setCapturedRenderable?.(event.target ?? undefined);
-    detailResizeStartY = event.y;
-    detailResizeStartHeight = detailPanelHeight();
-    setIsDetailResizing(true);
-    event.stopPropagation();
-  }
-
-  function handleDetailResizeDrag(event: MouseEvent) {
-    logResizeDebug("handleDetailResizeDrag", {
-      x: event.x,
-      y: event.y,
-      isResizing: isDetailResizing(),
-      startY: detailResizeStartY,
-      startHeight: detailResizeStartHeight,
-      currentHeight: detailPanelHeight(),
-      session: detailPanelSessionName(),
-    });
-    if (!isDetailResizing()) return;
-    const delta = detailResizeStartY - event.y;
-    const nextHeight = clampDetailPanelHeight(detailResizeStartHeight + delta);
-    setDetailPanelHeight(nextHeight);
-    logResizeDebug("handleDetailResizeDrag:applied", {
-      delta,
-      nextHeight,
-      session: detailPanelSessionName(),
-    });
-    event.stopPropagation();
-  }
-
-  function endDetailResize(event?: MouseEvent) {
-    logResizeDebug("endDetailResize", {
-      x: event?.x,
-      y: event?.y,
-      isResizing: isDetailResizing(),
-      currentHeight: detailPanelHeight(),
-      session: detailPanelSessionName(),
-      target: event?.target?.id ?? null,
-    });
-    if (!isDetailResizing()) return;
-    (renderer as any).setCapturedRenderable?.(undefined);
-    setIsDetailResizing(false);
-    setIsDetailResizeHover(false);
-
-    const sessionName = detailPanelSessionName();
-    if (sessionName) {
-      persistDetailPanelHeight(sessionName, detailPanelHeight());
-      logResizeDebug("endDetailResize:persisted", {
-        session: sessionName,
-        height: detailPanelHeight(),
-      });
-    }
-
-    event?.stopPropagation();
   }
 
   function createNewSession() {
@@ -450,12 +325,6 @@ function App() {
   }
 
   onMount(() => {
-    logResizeDebug("mount", {
-      startupSessionName,
-      localSessionName: getLocalSessionName(),
-      muxType: muxCtx.type,
-      tmuxPane: process.env.TMUX_PANE ?? null,
-    });
     // Refocus the main pane once terminal capability detection finishes.
     // This avoids the race where start.sh refocuses too early and capability
     // responses leak as garbage text into the main pane.
@@ -607,23 +476,22 @@ function App() {
     onCleanup(() => clearInterval(interval));
   });
 
-  createEffect(() => {
-    const sessionName = detailPanelSessionName();
-    if (!sessionName) return;
-    const storedHeight = getStoredDetailPanelHeight(sessionName);
-    logResizeDebug("loadStoredDetailPanelHeight", {
-      session: sessionName,
-      storedHeight,
+  // Scroll focused card into view after expand/collapse
+  createEffect(on(focusedSession, (name) => {
+    if (!name || !scrollboxRef) return;
+    queueMicrotask(() => {
+      scrollboxRef?.scrollChildIntoView?.(`session-${name}`);
     });
-    setDetailPanelHeight(storedHeight);
-  });
+  }, { defer: true }));
 
+  // Reset agent-mode when focused session loses all agents
   createEffect(() => {
-    logResizeDebug("detailPanelHeight:changed", {
-      height: detailPanelHeight(),
-      session: detailPanelSessionName(),
-      isResizing: isDetailResizing(),
-    });
+    const data = focusedData();
+    const agents = data?.agents ?? [];
+    if (panelFocus() === "agents" && agents.length === 0) {
+      setPanelFocus("sessions");
+    }
+    setFocusedAgentIdx((idx) => Math.min(idx, Math.max(0, agents.length - 1)));
   });
 
   useKeyboard((key) => {
@@ -688,8 +556,6 @@ function App() {
       case "h":
         if (panelFocus() === "agents") {
           setPanelFocus("sessions");
-        } else {
-          resizeDetailPanel(-1);
         }
         break;
       case "right":
@@ -700,8 +566,6 @@ function App() {
           if (agents.length > 0) {
             setPanelFocus("agents");
             setFocusedAgentIdx((idx) => Math.min(idx, agents.length - 1));
-          } else {
-            resizeDetailPanel(1);
           }
         }
         break;
@@ -804,7 +668,7 @@ function App() {
       </box>
 
       {/* Session list */}
-      <scrollbox flexGrow={1} flexShrink={1} paddingTop={1}>
+      <scrollbox ref={scrollboxRef} flexGrow={1} flexShrink={1} paddingTop={1} gap={1}>
         <For each={sessions}>
           {(session, i) => (
             <SessionCard
@@ -820,96 +684,31 @@ function App() {
                 send({ type: "focus-session", name: session.name });
                 switchToSession(session.name);
               }}
-            />
-          )}
-        </For>
-      </scrollbox>
-
-      {/* Listening ports for focused session — above detail panel */}
-      <Show when={focusedData()?.ports?.length}>
-        {(_) => {
-          const portRows = () => {
-            const ports = focusedData()?.ports ?? [];
-            const maxPerRow = 3;
-            const rows: number[][] = [];
-            for (let i = 0; i < ports.length; i += maxPerRow) {
-              rows.push(ports.slice(i, i + maxPerRow));
-            }
-            return rows;
-          };
-          return (
-            <box flexDirection="column" flexShrink={0} paddingLeft={2}>
-              <For each={portRows()}>
-                {(ports, rowIndex) => (
-                  <box flexDirection="row" paddingRight={1}>
-                    <text flexShrink={0}>
-                      <span style={{ fg: rowIndex() === 0 ? P().overlay0 : P().surface2, attributes: DIM }}>
-                        {rowIndex() === 0 ? "local " : "      "}
-                      </span>
-                    </text>
-                    <For each={ports}>
-                      {(port, portIndex) => (
-                        <box flexDirection="row" flexShrink={0}>
-                          <text onMouseDown={() => {
-                            Bun.spawn(["open", `http://localhost:${port}`], { stdout: "ignore", stderr: "ignore" });
-                          }}>
-                            <span style={{ fg: P().sky, attributes: BOLD }}>{String(port)}</span>
-                          </text>
-                          <Show when={portIndex() < ports.length - 1}>
-                            <text>
-                              <span style={{ fg: P().surface2 }}>{" · "}</span>
-                            </text>
-                          </Show>
-                        </box>
-                      )}
-                    </For>
-                  </box>
-                )}
-              </For>
-            </box>
-          );
-        }}
-      </Show>
-
-      {/* Detail panel — focused session info, draggable height */}
-      <Show when={focusedData()}>
-        {(data) => (
-          <scrollbox height={detailPanelHeight()} maxHeight={detailPanelHeight()} flexShrink={0}>
-            <DetailPanel
-              session={data()}
-              theme={theme}
-              statusColors={S}
-              spinIdx={spinIdx}
-              focusedAgentIdx={panelFocus() === "agents" ? focusedAgentIdx() : -1}
-              onDismissAgent={(agent) => {
+              panelFocus={panelFocus}
+              focusedAgentIdx={focusedAgentIdx}
+              onAgentDismiss={(agent) => {
                 send({
                   type: "dismiss-agent",
-                  session: data().name,
+                  session: session.name,
                   agent: agent.agent,
                   threadId: agent.threadId,
                 });
               }}
-              onFocusAgentPane={(agent) => {
+              onAgentFocus={(agent) => {
                 appendFileSync("/tmp/opensessions-tui-agent-click.log",
-                  `[${new Date().toISOString()}] sending focus-agent-pane session=${data().name} agent=${agent.agent} threadId=${agent.threadId} threadName=${agent.threadName}\n`);
+                  `[${new Date().toISOString()}] sending focus-agent-pane session=${session.name} agent=${agent.agent} threadId=${agent.threadId} threadName=${agent.threadName}\n`);
                 send({
                   type: "focus-agent-pane",
-                  session: data().name,
+                  session: session.name,
                   agent: agent.agent,
                   threadId: agent.threadId,
                   threadName: agent.threadName,
                 });
               }}
-              isResizeHover={isDetailResizeHover()}
-              isResizing={isDetailResizing()}
-              onResizeStart={beginDetailResize}
-              onResizeDrag={handleDetailResizeDrag}
-              onResizeEnd={endDetailResize}
-              onResizeHoverChange={setIsDetailResizeHover}
             />
-          </scrollbox>
-        )}
-      </Show>
+          )}
+        </For>
+      </scrollbox>
 
       {/* Footer */}
       <box flexDirection="column" paddingLeft={1} paddingBottom={1} paddingTop={0} flexShrink={0}>
@@ -931,8 +730,6 @@ function App() {
             <span style={{ fg: P().overlay1 }}>{" cycle  "}</span>
             <span style={{ fg: P().overlay0 }}>{"⏎"}</span>
             <span style={{ fg: P().overlay1 }}>{" go  "}</span>
-            <span style={{ fg: P().overlay0 }}>{"→"}</span>
-            <span style={{ fg: P().overlay1 }}>{" agents  "}</span>
             <span style={{ fg: P().overlay0 }}>{"d"}</span>
             <span style={{ fg: P().overlay1 }}>{" hide  "}</span>
             <span style={{ fg: P().overlay0 }}>{"x"}</span>
@@ -1165,163 +962,6 @@ function buildSparkline(timestamps: number[], width: number, windowMs: number = 
   }).join("");
 }
 
-// --- Detail Panel ---
-
-interface DetailPanelProps {
-  session: SessionData;
-  theme: Accessor<Theme>;
-  statusColors: Accessor<Theme["status"]>;
-  spinIdx: Accessor<number>;
-  focusedAgentIdx: number;
-  onDismissAgent: (agent: SessionData["agents"][number]) => void;
-  onFocusAgentPane: (agent: SessionData["agents"][number]) => void;
-  isResizeHover: boolean;
-  isResizing: boolean;
-  onResizeStart: (event: MouseEvent) => void;
-  onResizeDrag: (event: MouseEvent) => void;
-  onResizeEnd: (event?: MouseEvent) => void;
-  onResizeHoverChange: (hovered: boolean) => void;
-}
-
-function DetailPanel(props: DetailPanelProps) {
-  const P = () => props.theme().palette;
-
-  const agents = () => props.session.agents ?? [];
-  const hasAgents = () => agents().length > 0;
-  const meta = () => props.session.metadata;
-  const hasMeta = () => !!meta();
-  const visibleLogs = () => {
-    const m = meta();
-    if (!m || m.logs.length === 0) return [];
-    return m.logs.slice(-8);
-  };
-
-  const dirParts = () => formatDir(props.session.dir);
-
-  return (
-    <box flexDirection="column" flexShrink={0} paddingLeft={1}>
-      <box height={1}>
-        <text
-          selectable={false}
-          onMouseDown={(event) => {
-            logResizeDebug("separator:onMouseDown", { x: event.x, y: event.y, button: event.button, session: props.session.name });
-            event.preventDefault();
-            props.onResizeStart(event);
-          }}
-          onMouseDrag={(event) => {
-            logResizeDebug("separator:onMouseDrag", { x: event.x, y: event.y, button: event.button, session: props.session.name });
-            event.preventDefault();
-            props.onResizeDrag(event);
-          }}
-          onMouseDragEnd={(event) => {
-            logResizeDebug("separator:onMouseDragEnd", { x: event.x, y: event.y, button: event.button, session: props.session.name });
-            event.preventDefault();
-            props.onResizeEnd(event);
-          }}
-          onMouseUp={(event) => {
-            logResizeDebug("separator:onMouseUp", { x: event.x, y: event.y, button: event.button, session: props.session.name });
-            event.preventDefault();
-            props.onResizeEnd(event);
-          }}
-          onMouseOver={() => props.onResizeHoverChange(true)}
-          onMouseOut={() => {
-            if (!props.isResizing) props.onResizeHoverChange(false);
-          }}
-          style={{
-            fg: props.isResizing
-              ? P().blue
-              : props.isResizeHover
-                ? P().overlay1
-                : P().surface2,
-          }}
-        >
-          {"─".repeat(200)}
-        </text>
-      </box>
-
-      {/* Directory */}
-      <text truncate>
-        <span style={{ fg: P().subtext0 }}>{dirParts().project}</span>
-      </text>
-      <Show when={dirParts().parent}>
-        <text truncate>
-          <span style={{ fg: P().overlay0, attributes: DIM }}>{"  "}{dirParts().parent}</span>
-        </text>
-      </Show>
-
-      {/* Agent instances */}
-      <Show when={hasAgents()}>
-        <For each={agents()}>
-          {(agent, i) => (
-            <AgentListItem
-              agent={agent}
-              palette={P}
-              statusColors={props.statusColors}
-              spinIdx={props.spinIdx}
-              isKeyboardFocused={i() === props.focusedAgentIdx}
-              onDismiss={() => props.onDismissAgent(agent)}
-              onFocusPane={() => props.onFocusAgentPane(agent)}
-            />
-          )}
-        </For>
-      </Show>
-
-      {/* Metadata: status, progress, logs */}
-      <Show when={hasMeta()}>
-        {(_) => {
-          const m = meta()!;
-          const progressText = () => {
-            const p = m.progress;
-            if (!p) return "";
-            if (p.current != null && p.total != null) return `${p.current}/${p.total}`;
-            if (p.percent != null) return `${Math.round(p.percent * 100)}%`;
-            return "";
-          };
-          return (
-            <box flexDirection="column">
-              <box height={1} />
-
-              {/* Status + progress on one line */}
-              <Show when={m.status || m.progress}>
-                <box flexDirection="row" paddingRight={1}>
-                  <Show when={m.status}>
-                    <text truncate flexGrow={1}>
-                      <span style={{ fg: toneColor(m.status!.tone, P()) }}>{TONE_ICONS[m.status!.tone ?? "neutral"]} {m.status!.text}</span>
-                    </text>
-                  </Show>
-                  <Show when={m.progress}>
-                    <text flexShrink={0}>
-                      <span style={{ fg: P().sky }}>
-                        {m.status ? " · " : ""}{progressText()}{m.progress!.label ? ` ${m.progress!.label}` : ""}
-                      </span>
-                    </text>
-                  </Show>
-                </box>
-              </Show>
-
-              {/* Log entries */}
-              <Show when={visibleLogs().length > 0}>
-                <For each={visibleLogs()}>
-                  {(entry) => (
-                    <text truncate>
-                      <span style={{ fg: toneColor(entry.tone, P()), attributes: DIM }}>
-                        {TONE_ICONS[entry.tone ?? "neutral"]}
-                      </span>
-                      <Show when={entry.source}>
-                        <span style={{ fg: P().surface2, attributes: DIM }}>{` [${entry.source}]`}</span>
-                      </Show>
-                      <span style={{ fg: P().overlay0 }}>{" "}{entry.message}</span>
-                    </text>
-                  )}
-                </For>
-              </Show>
-            </box>
-          );
-        }}
-      </Show>
-    </box>
-  );
-}
 
 interface AgentListItemProps {
   agent: SessionData["agents"][number];
@@ -1394,15 +1034,12 @@ function AgentListItem(props: AgentListItemProps) {
   };
 
   return (
-    <box flexDirection="column" flexShrink={0} onMouseDown={(event) => {
-      // Don't trigger focus if clicking the dismiss button
-      if ((event.target as any)?.id === "dismiss") return;
+    <box flexDirection="column" flexShrink={0} onMouseDown={() => {
       appendFileSync("/tmp/opensessions-tui-agent-click.log",
         `[${new Date().toISOString()}] clicked agent=${props.agent.agent} thread=${props.agent.threadName ?? "?"}\n`);
       triggerFlash();
       props.onFocusPane();
     }}>
-      <box height={1} />
       <box
         flexDirection="row"
         backgroundColor={bgColor()}
@@ -1461,6 +1098,10 @@ interface SessionCardProps {
   theme: Accessor<Theme>;
   statusColors: Accessor<Theme["status"]>;
   onSelect: () => void;
+  panelFocus: Accessor<"sessions" | "agents">;
+  focusedAgentIdx: Accessor<number>;
+  onAgentDismiss: (agent: SessionData["agents"][number]) => void;
+  onAgentFocus: (agent: SessionData["agents"][number]) => void;
 }
 
 function SessionCard(props: SessionCardProps) {
@@ -1587,8 +1228,35 @@ function SessionCard(props: SessionCardProps) {
     return "transparent";
   };
 
+  // --- Expanded content helpers ---
+  const dirParts = () => formatDir(props.session.dir);
+  const dirMismatch = () => dirParts().project !== props.session.name;
+  const agents = () => props.session.agents ?? [];
+  const meta = () => props.session.metadata;
+  const visibleLogs = () => {
+    const m = meta();
+    if (!m || m.logs.length === 0) return [];
+    return m.logs.slice(-8);
+  };
+  const portRows = () => {
+    const ports = props.session.ports ?? [];
+    const maxPerRow = 3;
+    const rows: number[][] = [];
+    for (let i = 0; i < ports.length; i += maxPerRow) {
+      rows.push(ports.slice(i, i + maxPerRow));
+    }
+    return rows;
+  };
+  const progressText = () => {
+    const p = meta()?.progress;
+    if (!p) return "";
+    if (p.current != null && p.total != null) return `${p.current}/${p.total}`;
+    if (p.percent != null) return `${Math.round(p.percent * 100)}%`;
+    return "";
+  };
+
   return (
-    <box flexDirection="column" flexShrink={0}>
+    <box id={`session-${props.session.name}`} flexDirection="column" flexShrink={0}>
       <box
         flexDirection="row"
         backgroundColor={bgColor()}
@@ -1644,8 +1312,8 @@ function SessionCard(props: SessionCardProps) {
             </box>
           </Show>
 
-          {/* Row 3: metadata summary (status + progress) */}
-          <Show when={metaSummary()}>
+          {/* Row 3: metadata summary (status + progress) — only when collapsed */}
+          <Show when={!props.isFocused && metaSummary()}>
             <text truncate>
               <span style={{ fg: toneColor(metaTone(), P()), attributes: DIM }}>{metaSummary()}</span>
             </text>
@@ -1653,8 +1321,117 @@ function SessionCard(props: SessionCardProps) {
         </box>
       </box>
 
-      {/* Breathing room — 1 empty line between cards */}
-      <box height={1} />
+      {/* Expanded detail — shown inline when focused */}
+      <Show when={props.isFocused}>
+        <box flexDirection="column" paddingLeft={5}>
+          {/* Directory — only when cwd doesn't match session name */}
+          <Show when={dirMismatch()}>
+            <text truncate>
+              <span style={{ fg: P().subtext0 }}>{dirParts().project}</span>
+            </text>
+            <Show when={dirParts().parent}>
+              <text truncate>
+                <span style={{ fg: P().overlay0, attributes: DIM }}>{"  "}{dirParts().parent}</span>
+              </text>
+            </Show>
+          </Show>
+
+          {/* Ports — full clickable list */}
+          <Show when={props.session.ports?.length}>
+            <box flexDirection="column" flexShrink={0}>
+              <For each={portRows()}>
+                {(ports, rowIndex) => (
+                  <box flexDirection="row" paddingRight={1}>
+                    <text flexShrink={0}>
+                      <span style={{ fg: rowIndex() === 0 ? P().overlay0 : P().surface2, attributes: DIM }}>
+                        {rowIndex() === 0 ? "local " : "      "}
+                      </span>
+                    </text>
+                    <For each={ports}>
+                      {(port, portIndex) => (
+                        <box flexDirection="row" flexShrink={0}>
+                          <text onMouseDown={() => {
+                            Bun.spawn(["open", `http://localhost:${port}`], { stdout: "ignore", stderr: "ignore" });
+                          }}>
+                            <span style={{ fg: P().sky, attributes: BOLD }}>{String(port)}</span>
+                          </text>
+                          <Show when={portIndex() < ports.length - 1}>
+                            <text>
+                              <span style={{ fg: P().surface2 }}>{" · "}</span>
+                            </text>
+                          </Show>
+                        </box>
+                      )}
+                    </For>
+                  </box>
+                )}
+              </For>
+            </box>
+          </Show>
+
+          {/* Agent instances */}
+          <Show when={agents().length > 0}>
+            <box flexDirection="column" gap={1}>
+              <For each={agents()}>
+                {(agent, i) => (
+                  <AgentListItem
+                    agent={agent}
+                    palette={() => P()}
+                    statusColors={props.statusColors}
+                    spinIdx={props.spinIdx}
+                    isKeyboardFocused={props.panelFocus() === "agents" && i() === props.focusedAgentIdx()}
+                    onDismiss={() => props.onAgentDismiss(agent)}
+                    onFocusPane={() => props.onAgentFocus(agent)}
+                  />
+                )}
+              </For>
+            </box>
+          </Show>
+
+          {/* Metadata: status, progress, logs */}
+          <Show when={meta()}>
+            {(_) => {
+              const m = meta()!;
+              return (
+                <box flexDirection="column">
+                  <box height={1} />
+                  <Show when={m.status || m.progress}>
+                    <box flexDirection="row" paddingRight={1}>
+                      <Show when={m.status}>
+                        <text truncate flexGrow={1}>
+                          <span style={{ fg: toneColor(m.status!.tone, P()) }}>{TONE_ICONS[m.status!.tone ?? "neutral"]} {m.status!.text}</span>
+                        </text>
+                      </Show>
+                      <Show when={m.progress}>
+                        <text flexShrink={0}>
+                          <span style={{ fg: P().sky }}>
+                            {m.status ? " · " : ""}{progressText()}{m.progress!.label ? ` ${m.progress!.label}` : ""}
+                          </span>
+                        </text>
+                      </Show>
+                    </box>
+                  </Show>
+                  <Show when={visibleLogs().length > 0}>
+                    <For each={visibleLogs()}>
+                      {(entry) => (
+                        <text truncate>
+                          <span style={{ fg: toneColor(entry.tone, P()), attributes: DIM }}>
+                            {TONE_ICONS[entry.tone ?? "neutral"]}
+                          </span>
+                          <Show when={entry.source}>
+                            <span style={{ fg: P().surface2, attributes: DIM }}>{` [${entry.source}]`}</span>
+                          </Show>
+                          <span style={{ fg: P().overlay0 }}>{" "}{entry.message}</span>
+                        </text>
+                      )}
+                    </For>
+                  </Show>
+                </box>
+              );
+            }}
+          </Show>
+        </box>
+      </Show>
     </box>
   );
 }

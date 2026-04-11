@@ -1704,17 +1704,34 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       log("bootstrap", "detected existing sidebar panes", { count: existingSidebars });
       enforceSidebarWidth();
 
-      // Reload TUI: cycle sidebars so they pick up new TUI bundle.
+      // Reload TUI: kill all sidebar panes (and stash) then respawn fresh.
       // Triggered by /restart (default) — opt out with ?reload-tui=false.
+      // Note: the old toggle cycle (hide/show) didn't work because tmux's
+      // spawnSidebar restores stashed panes instead of spawning fresh processes.
       if (process.env.OPENSESSIONS_RELOAD_TUI === "1") {
         delete process.env.OPENSESSIONS_RELOAD_TUI;
-        log("bootstrap", "reloading TUI — cycling sidebars");
-        // Brief delay so the server is fully ready before spawning new TUIs
+        log("bootstrap", "reloading TUI — killing and respawning sidebars");
         setTimeout(() => {
-          toggleSidebar(); // off — hides existing panes
+          const providers = getProvidersWithSidebar();
+          for (const p of providers) {
+            const panes = p.listSidebarPanes();
+            for (const pane of panes) {
+              log("bootstrap", "killing sidebar pane for reload", { paneId: pane.paneId, session: pane.sessionName });
+              p.killSidebarPane(pane.paneId);
+            }
+            p.cleanupSidebar();
+          }
+          invalidateSidebarPaneCache();
+          // Respawn fresh sidebars in all active windows
           setTimeout(() => {
-            toggleSidebar(); // on — spawns fresh TUI processes with new code
-          }, 500);
+            for (const p of providers) {
+              for (const w of p.listActiveWindows()) {
+                ensureSidebarInWindow(p, { session: w.sessionName, windowId: w.id });
+              }
+            }
+            enforceSidebarWidth();
+            server.publish("sidebar", JSON.stringify({ type: "re-identify" }));
+          }, 300);
         }, 500);
       }
     }
