@@ -1749,6 +1749,19 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     }
     refreshPortSnapshot(allMuxSessions);
   }
+
+  // Floor configured width against content — saved config may be stale/too narrow.
+  {
+    const bootState = computeState();
+    const minWidth = computeMinSidebarWidth(bootState.sessions);
+    if (configuredWidth < minWidth) {
+      log("bootstrap", `width ${configuredWidth} < content min ${minWidth}, bumping`);
+      configuredWidth = minWidth;
+      saveConfig({ sidebarWidth: configuredWidth });
+      if (sidebarVisible) enforceSidebarWidth();
+    }
+  }
+
   broadcastState();
   startPortPoll();
   startPaneScan();
