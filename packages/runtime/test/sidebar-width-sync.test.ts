@@ -77,70 +77,89 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
   };
 }
 
+// All content widths include +2 for the focused card's border box.
 describe("computeMinSidebarWidth", () => {
   test("returns absolute minimum for empty session list", () => {
     expect(computeMinSidebarWidth([])).toBe(ABSOLUTE_MIN_SIDEBAR_WIDTH);
   });
 
-  test("fits short session name: index(3) + name + status(2) + pad(1)", () => {
-    // "test" = 4 chars → 3 + 4 + 2 + 1 = 10, but floor is 15
+  test("fits short session name: index(3) + name + status(2) + pad(1) + border(2)", () => {
+    // "test" = 4 → content 10 + border 2 = 12, but floor is 15
     expect(computeMinSidebarWidth([makeSession({ name: "test" })])).toBe(ABSOLUTE_MIN_SIDEBAR_WIDTH);
   });
 
   test("fits a longer session name", () => {
-    // "my-cool-project" = 15 chars → 3 + 15 + 2 + 1 = 21
-    expect(computeMinSidebarWidth([makeSession({ name: "my-cool-project" })])).toBe(21);
+    // "my-cool-project" = 15 → 3 + 15 + 2 + 1 + 2 = 23
+    expect(computeMinSidebarWidth([makeSession({ name: "my-cool-project" })])).toBe(23);
   });
 
   test("truncates name at 18 chars", () => {
-    // 25-char name truncated to 18 → 3 + 18 + 2 + 1 = 24
+    // 25-char name truncated to 18 → 3 + 18 + 2 + 1 + 2 = 26
     const longName = "a".repeat(25);
-    expect(computeMinSidebarWidth([makeSession({ name: longName })])).toBe(24);
+    expect(computeMinSidebarWidth([makeSession({ name: longName })])).toBe(26);
   });
 
   test("branch row can drive the width", () => {
     // name "ab" = 2 → name row = 3 + 2 + 2 + 1 = 8
     // branch "feature/long" = 12 → branch row = 3 + 12 + 1 = 16
+    // widest content = 16 + border 2 = 18
     expect(computeMinSidebarWidth([
       makeSession({ name: "ab", branch: "feature/long" }),
-    ])).toBe(16);
+    ])).toBe(18);
   });
 
   test("branch + port hint widens the branch row", () => {
-    // branch "main" = 4, ports [3000] → portHint "⌁3000" = 5 chars
-    // branch row = 3 + 4 + 1 (space) + 5 + 1 = 14, still below floor
+    // branch "main" = 4, ports [3000] → "⌁3000" = 5
+    // branch row = 3 + 4 + 1 + 5 + 1 = 14, + border 2 = 16
     expect(computeMinSidebarWidth([
       makeSession({ name: "ab", branch: "main", ports: [3000] }),
-    ])).toBe(ABSOLUTE_MIN_SIDEBAR_WIDTH);
+    ])).toBe(16);
 
-    // branch "feat/signup" = 11, ports [3000, 3001] → "⌁3000+1" = 7 chars
-    // branch row = 3 + 11 + 1 + 7 + 1 = 23
+    // branch "feat/signup" = 11, ports [3000, 3001] → "⌁3000+1" = 7
+    // branch row = 3 + 11 + 1 + 7 + 1 = 23 + border 2 = 25
     expect(computeMinSidebarWidth([
       makeSession({ name: "ab", branch: "feat/signup", ports: [3000, 3001] }),
-    ])).toBe(23);
+    ])).toBe(25);
   });
 
   test("ports without branch still account for row 2", () => {
-    // No branch, ports [8080] → portHint "⌁8080" = 5 chars
-    // branch row = 3 + 0 + 5 + 1 = 9, below floor
+    // ports [8080] → "⌁8080" = 5. branch row = 3 + 0 + 5 + 1 = 9 + border 2 = 11
+    // name "a" → name row = 3 + 1 + 2 + 1 = 7 + border 2 = 9. floor wins.
     expect(computeMinSidebarWidth([
       makeSession({ name: "a", branch: "", ports: [8080] }),
     ])).toBe(ABSOLUTE_MIN_SIDEBAR_WIDTH);
+  });
 
-    // Short name but wide port hint
-    // ports [3000, 3001, 3002] → "⌁3000+2" = 7 chars
-    // branch row = 3 + 0 + 7 + 1 = 11, still below floor
+  test("agent badge adds to name row", () => {
+    // "opensessions" = 12, 2 alive agents → badge " ●2" = 3
+    // name row = 3 + 12 + 3 + 2 + 1 = 21 + border 2 = 23
+    const agents = [
+      { agent: "claude", session: "x", status: "running" as const, ts: 0, liveness: "alive" as const },
+      { agent: "amp", session: "x", status: "running" as const, ts: 0, liveness: "alive" as const },
+    ];
     expect(computeMinSidebarWidth([
-      makeSession({ name: "a", branch: "", ports: [3000, 3001, 3002] }),
-    ])).toBe(ABSOLUTE_MIN_SIDEBAR_WIDTH);
+      makeSession({ name: "opensessions", agents }),
+    ])).toBe(23);
+  });
+
+  test("exited agents do not contribute to badge width", () => {
+    // 1 alive + 1 exited → badge " ●" = 2
+    // "opensessions" = 12 → 3 + 12 + 2 + 2 + 1 = 20 + border 2 = 22
+    const agents = [
+      { agent: "claude", session: "x", status: "running" as const, ts: 0, liveness: "alive" as const },
+      { agent: "amp", session: "x", status: "done" as const, ts: 0, liveness: "exited" as const },
+    ];
+    expect(computeMinSidebarWidth([
+      makeSession({ name: "opensessions", agents }),
+    ])).toBe(22);
   });
 
   test("uses widest session across multiple", () => {
     const sessions = [
       makeSession({ name: "a" }),
-      makeSession({ name: "opensessions" }), // 12 → 3+12+2+1 = 18
+      makeSession({ name: "opensessions" }), // 3+12+2+1 = 18 + border 2 = 20
       makeSession({ name: "b" }),
     ];
-    expect(computeMinSidebarWidth(sessions)).toBe(18);
+    expect(computeMinSidebarWidth(sessions)).toBe(20);
   });
 });
