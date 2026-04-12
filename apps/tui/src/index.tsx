@@ -1112,16 +1112,14 @@ function AgentListItem(props: AgentListItemProps) {
     return "ready";
   };
 
-  const isTerminal = () => label() === "stopped" || label() === "error";
-  const isUnseen = () => isTerminal() && props.agent.unseen === true;
+  const isUnseen = () => props.agent.unseen === true;
 
   const icon = () => {
-    if (isUnseen()) return UNSEEN_ICON;
     const l = label();
     if (l === "working") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
-    if (l === "waiting") return "◉";
+    if (l === "waiting") return "◆";
     if (l === "ready") return "◇";
-    if (l === "stopped") return "■";
+    if (l === "stopped") return "·";
     if (l === "error") return "✗";
     return "◇";
   };
@@ -1135,8 +1133,6 @@ function AgentListItem(props: AgentListItemProps) {
     if (l === "error") return P().red;
     return P().surface2;
   };
-
-  const statusText = () => label();
 
   const triggerFlash = () => {
     setIsFlash(true);
@@ -1157,57 +1153,56 @@ function AgentListItem(props: AgentListItemProps) {
       props.onFocusPane();
     }}>
       <box
-        flexDirection="row"
+        flexDirection="column"
         backgroundColor={bgColor()}
-        paddingLeft={1}
+        paddingRight={1}
       >
-        {/* Content column — name row + thread name row */}
-        <box flexDirection="column" flexGrow={1} paddingRight={1}>
-          {/* Row 1: icon + agent name + status + dismiss */}
-          <box flexDirection="row">
-            <text flexGrow={1} truncate>
-              <span style={{ fg: color() }}>{icon()}</span>
-              <span style={{ fg: props.isKeyboardFocused ? P().text : P().subtext1, attributes: props.isKeyboardFocused ? BOLD : undefined }}>{" "}{props.agent.agent}</span>
-              <Show when={props.agent.threadId}>
-                <span style={{ fg: P().overlay0, attributes: DIM }}>{" #"}{props.agent.threadId!.slice(0, 4)}</span>
-              </Show>
+        {/* Row 1: dismiss + agent name + threadId ... unseen badge + status icon */}
+        <box flexDirection="row">
+          <text
+            flexShrink={0}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              props.onDismiss();
+            }}
+            onMouseOver={() => setIsDismissHover(true)}
+            onMouseOut={() => setIsDismissHover(false)}
+          >
+            <span style={{ fg: isDismissHover() ? P().red : P().overlay0 }}>{"✕ "}</span>
+          </text>
+          <text flexGrow={1} truncate>
+            <span style={{ fg: props.isKeyboardFocused ? P().text : P().subtext1, attributes: props.isKeyboardFocused ? BOLD : undefined }}>{props.agent.agent}</span>
+            <Show when={props.agent.threadId}>
+              <span style={{ fg: P().overlay0, attributes: DIM }}>{" #"}{props.agent.threadId!.slice(0, 4)}</span>
+            </Show>
+          </text>
+          <Show when={isUnseen()}>
+            <text flexShrink={0}>
+              <span style={{ fg: P().teal }}>{" "}{UNSEEN_ICON}</span>
             </text>
-            <Show when={!isTerminal() || !isUnseen()}>
-              <text flexShrink={0}>
-                <span style={{ fg: color(), attributes: DIM }}>{statusText()}</span>
+          </Show>
+          <text flexShrink={0}>
+            <span style={{ fg: color() }}>{" "}{icon()}</span>
+          </text>
+        </box>
+
+        {/* Row 2: live activity or thread name */}
+        {(() => {
+          const l = label();
+          const showActivity = (l === "working" || l === "waiting") && props.agent.toolDescription;
+          const previewText = showActivity
+            ? props.agent.toolDescription!.slice(0, 60)
+            : props.agent.threadName ? sanitizeThreadName(props.agent.threadName) : undefined;
+          const previewColor = showActivity ? color() : (isUnseen() ? color() : P().overlay0);
+          return (
+            <Show when={previewText}>
+              <text truncate>
+                <span style={{ fg: previewColor, attributes: { italic: true } }}>{previewText}</span>
               </text>
             </Show>
-            <text
-              flexShrink={0}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onDismiss();
-              }}
-              onMouseOver={() => setIsDismissHover(true)}
-              onMouseOut={() => setIsDismissHover(false)}
-            >
-              <span style={{ fg: isDismissHover() ? P().red : P().overlay0 }}>{" ✕"}</span>
-            </text>
-          </box>
-
-          {/* Row 2: live activity or thread name */}
-          {(() => {
-            const l = label();
-            const showActivity = (l === "working" || l === "waiting") && props.agent.toolDescription;
-            const previewText = showActivity
-              ? props.agent.toolDescription!.slice(0, 60)
-              : props.agent.threadName ? sanitizeThreadName(props.agent.threadName) : undefined;
-            const previewColor = showActivity ? color() : (isUnseen() ? color() : P().overlay0);
-            return (
-              <Show when={previewText}>
-                <text truncate>
-                  <span style={{ fg: previewColor, attributes: { italic: true } }}>{previewText}</span>
-                </text>
-              </Show>
-            );
-          })()}
-        </box>
+          );
+        })()}
       </box>
     </box>
   );
@@ -1247,20 +1242,17 @@ function SessionCard(props: SessionCardProps) {
 
   const unseen = () => props.session.unseen;
 
-  const isUnseenTerminal = () =>
-    unseen() && (label() === "stopped" || label() === "error");
-
-
   const statusIcon = () => {
     const l = label();
     if (l === "working") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
-    if (isUnseenTerminal()) return UNSEEN_ICON;
+    if (l === "waiting") return "◆";
     if (l === "ready" && props.session.agentState) return "◇";
+    if (l === "stopped") return "·";
+    if (l === "error") return "✗";
     return "";
   };
 
   const statusColor = () => {
-    if (isUnseenTerminal()) return label() === "error" ? P().red : P().teal;
     const l = label();
     if (l === "working") return P().blue;
     if (l === "waiting") return P().yellow;
@@ -1384,6 +1376,11 @@ function SessionCard(props: SessionCardProps) {
               </Show>
             </text>
             <box flexGrow={1} />
+            <Show when={unseen()}>
+              <text flexShrink={0}>
+                <span style={{ fg: P().teal }}>{" "}{UNSEEN_ICON}</span>
+              </text>
+            </Show>
             <Show when={statusIcon()}>
               <text flexShrink={0}>
                 <span style={{ fg: statusColor() }}>{" "}{statusIcon()}</span>

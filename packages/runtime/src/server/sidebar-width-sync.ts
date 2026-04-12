@@ -14,9 +14,8 @@ const NAME_TRUNC_LIMIT = 18;
 const BRANCH_TRUNC_LIMIT = 15;
 
 // Expanded agent list item layout (inside focused card border + paddingLeft={3}):
-//   expandPad(3) + agentPadLeft(1) + icon(1) + " "(1) + name + [threadId] + status + " ✕"(2) + agentPadRight(1)
-const AGENT_ROW_FIXED = 3 + 1 + 1 + 1 + 2 + 1; // = 9
-const LONGEST_STATUS_LABEL = 7;    // "stopped" — the widest of the five labels
+//   expandPad(3) + dismiss(2) + name + [threadId] + [unseenBadge] + statusIcon(2) + padRight(1)
+const AGENT_ROW_FIXED = 3 + 2 + 2 + 1; // = 8
 const THREAD_ID_COLS = 6;          // " #" + 4 chars (threadId.slice(0, 4))
 
 /**
@@ -39,7 +38,8 @@ export function computeMinSidebarWidth(sessions: SessionData[]): number {
     // Collapsed name row
     const nameLen = Math.min(s.name.length, NAME_TRUNC_LIMIT);
     const badge = agentBadgeWidth(s);
-    const nameRow = INDEX_COLS + nameLen + badge + STATUS_ICON_COLS + PADDING_RIGHT;
+    const unseenCols = s.unseen ? 2 : 0; // " ●" when session has unseen agents
+    const nameRow = INDEX_COLS + nameLen + badge + unseenCols + STATUS_ICON_COLS + PADDING_RIGHT;
 
     // Collapsed branch row (renders when branch OR ports are present)
     const portHintLen = portHintWidth(s.ports ?? []);
@@ -56,7 +56,8 @@ export function computeMinSidebarWidth(sessions: SessionData[]): number {
     // can become focused, so measure all of them)
     for (const a of s.agents ?? []) {
       const threadCols = a.threadId ? THREAD_ID_COLS : 0;
-      const agentRow = AGENT_ROW_FIXED + a.agent.length + threadCols + LONGEST_STATUS_LABEL;
+      const unseenBadge = a.unseen ? 2 : 0; // " ●" when instance is unseen
+      const agentRow = AGENT_ROW_FIXED + a.agent.length + threadCols + unseenBadge;
       widestContent = Math.max(widestContent, agentRow);
     }
   }

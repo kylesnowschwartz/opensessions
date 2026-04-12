@@ -50,6 +50,36 @@ describe("AgentTracker", () => {
     expect(tracker.getUnseen()).not.toContain("sess-1");
   });
 
+  test("applyEvent marks waiting as unseen when session not active", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "waiting" }));
+
+    expect(tracker.getUnseen()).toContain("sess-1");
+  });
+
+  test("applyEvent does NOT mark waiting as unseen when session is active", () => {
+    tracker.setActiveSessions(["sess-1"]);
+    tracker.applyEvent(event({ session: "sess-1", status: "waiting" }));
+
+    expect(tracker.getUnseen()).not.toContain("sess-1");
+  });
+
+  test("applyEvent clears waiting unseen when same instance transitions to running", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "waiting", threadId: "t1" }));
+    expect(tracker.getUnseen()).toContain("sess-1");
+
+    tracker.applyEvent(event({ session: "sess-1", status: "running", threadId: "t1" }));
+    expect(tracker.getUnseen()).not.toContain("sess-1");
+  });
+
+  test("applyEvent: waiting unseen on instance A, running on instance B — A stays unseen", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "waiting", threadId: "t1" }));
+    expect(tracker.isUnseen("sess-1")).toBe(true);
+
+    // Instance B is running — should NOT clear instance A's unseen
+    tracker.applyEvent(event({ session: "sess-1", status: "running", threadId: "t2" }));
+    expect(tracker.isUnseen("sess-1")).toBe(true); // t1 still unseen
+  });
+
   test("applyEvent clears unseen when same instance transitions to non-terminal", () => {
     tracker.applyEvent(event({ session: "sess-1", status: "done", threadId: "t1" }));
     expect(tracker.getUnseen()).toContain("sess-1");

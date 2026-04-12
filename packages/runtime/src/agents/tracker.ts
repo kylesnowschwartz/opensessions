@@ -74,12 +74,12 @@ export class AgentTracker {
     // Per-instance unseen tracking
     // Seeded events always mark as unseen (they represent state from before the user connected)
     const ukey = this.unseenKey(event.session, key);
-    if (TERMINAL_STATUSES.has(event.status)) {
+    if (TERMINAL_STATUSES.has(event.status) || event.status === "waiting") {
       if (options?.seed || !this.active.has(event.session)) {
         this.unseenInstances.add(ukey);
       }
     } else {
-      // Non-terminal status for this instance = user is interacting, mark seen
+      // Non-terminal/non-waiting status for this instance = user is interacting, mark seen
       this.unseenInstances.delete(ukey);
     }
   }
