@@ -8,30 +8,39 @@ export const SAVE_DEBOUNCE_MS = 1000;
 // Layout constants matching the TUI's SessionCard rendering.
 const INDEX_COLS = 3;
 const PADDING_RIGHT = 1;
-const STATUS_ICON_COLS = 2; // " ⠋" or " ●"
-const FOCUSED_BORDER_COLS = 2; // <box border> on focused card eats 1 col per side
+const STATUS_ICON_COLS = 2;        // " ⠋" or " ●"
+const FOCUSED_BORDER = 2;          // <box border> on focused card: 1 col per side
 const NAME_TRUNC_LIMIT = 18;
 const BRANCH_TRUNC_LIMIT = 15;
+
+// Expanded agent list item layout (inside focused card border + paddingLeft={3}):
+//   expandPad(3) + agentPadLeft(1) + icon(1) + " "(1) + name + status + " ✕"(2) + agentPadRight(1)
+const AGENT_ROW_FIXED = 3 + 1 + 1 + 1 + 2 + 1; // = 9
+const LONGEST_STATUS_LABEL = 7;    // "stopped" — the widest of the five labels
 
 /**
  * Compute the narrowest sidebar width that still fits session content
  * without clipping. Mirrors the TUI's SessionCard layout math.
  *
- * Row 1 (name):   index(3) + name + badge + spacer + statusIcon(2) + pad(1)
- * Row 2 (branch): index(3) + branch + portHint + pad(1)
+ * Collapsed card rows (all cards):
+ *   Row 1 (name):   index(3) + name + badge + spacer + statusIcon(2) + pad(1)
+ *   Row 2 (branch): index(3) + branch + portHint + pad(1)
  *
- * The focused card is wrapped in a border box (+2 cols), so the pane must
- * be wide enough for: max(contentWidth) + 2.
+ * Expanded agent row (focused card only, inside border):
+ *   border(1) + expandPad(3) + agentPad(1) + icon+space(2) + agentName + statusLabel + dismiss(2) + pad(1) + border(1)
+ *
+ * The focused card is wrapped in a border box, so pane = content + 2.
  */
 export function computeMinSidebarWidth(sessions: SessionData[]): number {
-  let widest = 0;
+  let widestContent = 0;
 
   for (const s of sessions) {
+    // Collapsed name row
     const nameLen = Math.min(s.name.length, NAME_TRUNC_LIMIT);
     const badge = agentBadgeWidth(s);
     const nameRow = INDEX_COLS + nameLen + badge + STATUS_ICON_COLS + PADDING_RIGHT;
 
-    // Row 2 renders when branch OR ports are present
+    // Collapsed branch row (renders when branch OR ports are present)
     const portHintLen = portHintWidth(s.ports ?? []);
     const branchLen = s.branch ? Math.min(s.branch.length, BRANCH_TRUNC_LIMIT) : 0;
     let branchRow = 0;
@@ -40,11 +49,17 @@ export function computeMinSidebarWidth(sessions: SessionData[]): number {
       branchRow = INDEX_COLS + branchLen + spacer + portHintLen + PADDING_RIGHT;
     }
 
-    widest = Math.max(widest, nameRow, branchRow);
+    widestContent = Math.max(widestContent, nameRow, branchRow);
+
+    // Expanded agent rows (only the focused card shows these, but any card
+    // can become focused, so measure all of them)
+    for (const a of s.agents ?? []) {
+      const agentRow = AGENT_ROW_FIXED + a.agent.length + LONGEST_STATUS_LABEL;
+      widestContent = Math.max(widestContent, agentRow);
+    }
   }
 
-  // The focused card sits inside a bordered box — account for border columns.
-  return Math.max(ABSOLUTE_MIN_SIDEBAR_WIDTH, widest + FOCUSED_BORDER_COLS);
+  return Math.max(ABSOLUTE_MIN_SIDEBAR_WIDTH, widestContent + FOCUSED_BORDER);
 }
 
 /** Mirrors the TUI's agentCount/agentBadge logic: " ●" for 1, " ●N" for N>1. */

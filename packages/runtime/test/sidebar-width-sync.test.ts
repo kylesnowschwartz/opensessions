@@ -132,26 +132,38 @@ describe("computeMinSidebarWidth", () => {
 
   test("agent badge adds to name row", () => {
     // "opensessions" = 12, 2 alive agents → badge " ●2" = 3
-    // name row = 3 + 12 + 3 + 2 + 1 = 21 + border 2 = 23
+    // collapsed name row = 3 + 12 + 3 + 2 + 1 = 21
+    // expanded agent row "claude" = 9 + 6 + 7 = 22 (widest content)
+    // + border 2 = 24
     const agents = [
       { agent: "claude", session: "x", status: "running" as const, ts: 0, liveness: "alive" as const },
       { agent: "amp", session: "x", status: "running" as const, ts: 0, liveness: "alive" as const },
     ];
     expect(computeMinSidebarWidth([
       makeSession({ name: "opensessions", agents }),
-    ])).toBe(23);
+    ])).toBe(24);
   });
 
-  test("exited agents do not contribute to badge width", () => {
-    // 1 alive + 1 exited → badge " ●" = 2
-    // "opensessions" = 12 → 3 + 12 + 2 + 2 + 1 = 20 + border 2 = 22
+  test("expanded agent row drives width for long agent names", () => {
+    // "claude-code" = 11 → agent row = 9 + 11 + 7 = 27 + border 2 = 29
+    const agents = [
+      { agent: "claude-code", session: "x", status: "running" as const, ts: 0, liveness: "alive" as const },
+    ];
+    expect(computeMinSidebarWidth([
+      makeSession({ name: "short", agents }),
+    ])).toBe(29);
+  });
+
+  test("exited agents still contribute to expanded row width", () => {
+    // Even exited agents render in the list — "claude" = 6 → 9+6+7 = 22
+    // + border 2 = 24
     const agents = [
       { agent: "claude", session: "x", status: "running" as const, ts: 0, liveness: "alive" as const },
       { agent: "amp", session: "x", status: "done" as const, ts: 0, liveness: "exited" as const },
     ];
     expect(computeMinSidebarWidth([
       makeSession({ name: "opensessions", agents }),
-    ])).toBe(22);
+    ])).toBe(24);
   });
 
   test("uses widest session across multiple", () => {
