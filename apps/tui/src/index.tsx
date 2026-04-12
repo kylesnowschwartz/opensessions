@@ -1195,7 +1195,7 @@ function AgentListItem(props: AgentListItemProps) {
           return (
             <Show when={previewText}>
               <text truncate>
-                <span style={{ fg: previewColor, attributes: { italic: true } }}>{"  "}{previewText}</span>
+                <span style={{ fg: previewColor, attributes: { italic: true } }}>{"· "}{previewText}</span>
               </text>
             </Show>
           );
