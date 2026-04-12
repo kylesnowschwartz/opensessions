@@ -27,11 +27,11 @@ describe("registerHooks", () => {
   test("creates settings.json with all hooks when file does not exist", () => {
     const added = registerHooks(fakeOpensessionsDir, settingsPath);
 
-    expect(added).toEqual(["UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Notification"]);
+    expect(added).toEqual(["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Notification", "SessionEnd"]);
     expect(existsSync(settingsPath)).toBe(true);
 
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    expect(Object.keys(settings.hooks)).toHaveLength(6);
+    expect(Object.keys(settings.hooks)).toHaveLength(8);
 
     // Verify structure
     const hookScript = join(fakeOpensessionsDir, "scripts", "hook.sh");
@@ -51,16 +51,16 @@ describe("registerHooks", () => {
 
     const added = registerHooks(fakeOpensessionsDir, settingsPath);
 
-    expect(added).toHaveLength(6);
+    expect(added).toHaveLength(8);
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
     expect(settings.someOtherSetting).toBe(true);
     expect(settings.hooks.SomeOtherHook).toBeDefined();
-    expect(Object.keys(settings.hooks)).toHaveLength(7); // 6 new + 1 existing
+    expect(Object.keys(settings.hooks)).toHaveLength(9); // 8 new + 1 existing
   });
 
   test("is idempotent — running twice registers nothing the second time", () => {
     const first = registerHooks(fakeOpensessionsDir, settingsPath);
-    expect(first).toHaveLength(6);
+    expect(first).toHaveLength(8);
 
     const second = registerHooks(fakeOpensessionsDir, settingsPath);
     expect(second).toHaveLength(0);

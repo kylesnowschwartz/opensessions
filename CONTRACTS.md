@@ -10,10 +10,12 @@ opensessions registers one built-in watcher at server startup.
 
 ### Claude Code (Hook-Based)
 
-- Receives lifecycle hooks (`UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Notification`) via `POST /hook`.
+- Receives lifecycle hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Notification`, `SessionEnd`) via `POST /hook`.
 - Claude Code pushes events through `scripts/hook.sh`, registered in `~/.claude/settings.json`.
-- Maps hooks to status: `UserPromptSubmit`/`PreToolUse`/`PostToolUse` → `running`, `PermissionRequest` → `waiting`, `Stop` → `done`.
-- `Notification` branches on `notification_type`: `permission_prompt`/`idle_prompt` → `waiting`, others ignored.
+- Maps hooks to status: `SessionStart` → `idle`, `UserPromptSubmit`/`PreToolUse`/`PostToolUse` → `running`, `PermissionRequest` → `waiting`, `Stop`/`SessionEnd` → `done`.
+- `Notification` branches on `notification_type`: `permission_prompt` → `waiting`, `idle_prompt` → `done`, others ignored.
+- `PreToolUse` and `PermissionRequest` extract `tool_name` + `tool_input` to generate human-readable descriptions (e.g. "Reading config.ts", "Running git status") emitted as `AgentEvent.toolDescription`.
+- `SessionEnd` cleans up thread state for immediate cleanup instead of waiting for pane scanner pruning.
 - On cold start, performs a one-time seed scan of `~/.claude/projects/` JSONL files to bootstrap state for sessions already running.
 - On first hook for an unknown session, reads the JSONL file once to resolve the thread name.
 - No polling, no `fs.watch`, no intervals after startup.

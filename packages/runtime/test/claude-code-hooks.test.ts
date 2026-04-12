@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { ClaudeCodeHookAdapter } from "../src/agents/watchers/claude-code-hooks";
+import { ClaudeCodeHookAdapter, toolDescription } from "../src/agents/watchers/claude-code-hooks";
 import type { AgentEvent } from "../src/contracts/agent";
 import type { AgentWatcherContext, HookPayload } from "../src/contracts/agent-watcher";
 import { isHookReceiver } from "../src/contracts/agent-watcher";
@@ -189,13 +189,27 @@ describe("ClaudeCodeHookAdapter", () => {
 
   // --- Deduplication ---
 
-  test("does not emit duplicate status for same thread", () => {
+  test("does not emit duplicate status for non-tool events", () => {
     adapter.handleHook(hook("UserPromptSubmit", "sess-1", "/tmp/myproject"));
-    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject"));
+    // PostToolUse also maps to "running" and is not a tool-context event
+    adapter.handleHook(hook("PostToolUse", "sess-1", "/tmp/myproject"));
 
-    // Both are "running" — second should be suppressed
+    // Both are "running", neither is PreToolUse/PermissionRequest — second suppressed
     expect(ctx.events).toHaveLength(1);
     expect(ctx.events[0].status).toBe("running");
+  });
+
+  test("PreToolUse still emits even when status unchanged (carries tool description)", () => {
+    adapter.handleHook(hook("UserPromptSubmit", "sess-1", "/tmp/myproject"));
+    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject", {
+      tool_name: "Read",
+      tool_input: { file_path: "/tmp/foo.ts" },
+    }));
+
+    // Both are "running", but PreToolUse carries tool context so it still emits
+    expect(ctx.events).toHaveLength(2);
+    expect(ctx.events[0].toolDescription).toBeUndefined();
+    expect(ctx.events[1].toolDescription).toBe("Reading foo.ts");
   });
 
   test("emits when status changes", () => {
@@ -205,5 +219,201 @@ describe("ClaudeCodeHookAdapter", () => {
 
     expect(ctx.events).toHaveLength(3);
     expect(ctx.events.map((e) => e.status)).toEqual(["running", "done", "running"]);
+  });
+
+  // --- Tool descriptions ---
+
+  test("PreToolUse emits toolDescription for Read", () => {
+    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject", {
+      tool_name: "Read",
+      tool_input: { file_path: "/home/user/project/src/config.ts" },
+    }));
+
+    expect(ctx.events).toHaveLength(1);
+    expect(ctx.events[0].toolDescription).toBe("Reading config.ts");
+  });
+
+  test("PreToolUse emits toolDescription for Bash", () => {
+    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject", {
+      tool_name: "Bash",
+      tool_input: { command: "git status" },
+    }));
+
+    expect(ctx.events).toHaveLength(1);
+    expect(ctx.events[0].toolDescription).toBe("Running git status");
+  });
+
+  test("PermissionRequest includes toolDescription", () => {
+    adapter.handleHook(hook("PermissionRequest", "sess-1", "/tmp/myproject", {
+      tool_name: "Bash",
+      tool_input: { command: "git push origin main" },
+    }));
+
+    expect(ctx.events).toHaveLength(1);
+    expect(ctx.events[0].status).toBe("waiting");
+    expect(ctx.events[0].toolDescription).toBe("Running git push origin main");
+  });
+
+  test("consecutive PreToolUse events with same status still emit (new tool description)", () => {
+    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject", {
+      tool_name: "Read",
+      tool_input: { file_path: "/tmp/a.ts" },
+    }));
+    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject", {
+      tool_name: "Edit",
+      tool_input: { file_path: "/tmp/b.ts" },
+    }));
+
+    expect(ctx.events).toHaveLength(2);
+    expect(ctx.events[0].toolDescription).toBe("Reading a.ts");
+    expect(ctx.events[1].toolDescription).toBe("Editing b.ts");
+  });
+
+  test("UserPromptSubmit clears toolDescription", () => {
+    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject", {
+      tool_name: "Read",
+      tool_input: { file_path: "/tmp/a.ts" },
+    }));
+    adapter.handleHook(hook("Stop", "sess-1", "/tmp/myproject"));
+    adapter.handleHook(hook("UserPromptSubmit", "sess-1", "/tmp/myproject"));
+
+    expect(ctx.events).toHaveLength(3);
+    expect(ctx.events[2].toolDescription).toBeUndefined();
+  });
+
+  test("Stop clears toolDescription", () => {
+    adapter.handleHook(hook("PreToolUse", "sess-1", "/tmp/myproject", {
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    }));
+    adapter.handleHook(hook("Stop", "sess-1", "/tmp/myproject"));
+
+    expect(ctx.events).toHaveLength(2);
+    expect(ctx.events[1].toolDescription).toBeUndefined();
+  });
+
+  // --- SessionStart ---
+
+  test("SessionStart emits idle", () => {
+    adapter.handleHook(hook("SessionStart", "sess-1", "/tmp/myproject"));
+
+    expect(ctx.events).toHaveLength(1);
+    expect(ctx.events[0].status).toBe("idle");
+    expect(ctx.events[0].session).toBe("myproject");
+    expect(ctx.events[0].threadId).toBe("sess-1");
+  });
+
+  test("SessionStart followed by UserPromptSubmit transitions to running", () => {
+    adapter.handleHook(hook("SessionStart", "sess-1", "/tmp/myproject"));
+    adapter.handleHook(hook("UserPromptSubmit", "sess-1", "/tmp/myproject"));
+
+    expect(ctx.events).toHaveLength(2);
+    expect(ctx.events[0].status).toBe("idle");
+    expect(ctx.events[1].status).toBe("running");
+  });
+
+  // --- SessionEnd ---
+
+  test("SessionEnd emits done", () => {
+    adapter.handleHook(hook("UserPromptSubmit", "sess-1", "/tmp/myproject"));
+    adapter.handleHook(hook("SessionEnd", "sess-1", "/tmp/myproject"));
+
+    expect(ctx.events).toHaveLength(2);
+    expect(ctx.events[1].status).toBe("done");
+  });
+
+  test("SessionEnd cleans up thread state", () => {
+    adapter.handleHook(hook("UserPromptSubmit", "sess-1", "/tmp/myproject"));
+    adapter.handleHook(hook("SessionEnd", "sess-1", "/tmp/myproject"));
+    // New SessionStart for same session_id should create fresh state
+    adapter.handleHook(hook("SessionStart", "sess-1", "/tmp/myproject"));
+
+    expect(ctx.events).toHaveLength(3);
+    expect(ctx.events[2].status).toBe("idle");
+  });
+});
+
+// --- toolDescription unit tests ---
+
+describe("toolDescription", () => {
+  test("Read with file_path returns basename", () => {
+    expect(toolDescription("Read", { file_path: "/home/user/project/src/config.ts" }))
+      .toBe("Reading config.ts");
+  });
+
+  test("Edit with file_path returns basename", () => {
+    expect(toolDescription("Edit", { file_path: "/tmp/main.go" }))
+      .toBe("Editing main.go");
+  });
+
+  test("Write with file_path returns basename", () => {
+    expect(toolDescription("Write", { file_path: "/tmp/out.json" }))
+      .toBe("Writing out.json");
+  });
+
+  test("Read without file_path returns verb only", () => {
+    expect(toolDescription("Read", {})).toBe("Reading");
+  });
+
+  test("Bash with command returns truncated command", () => {
+    expect(toolDescription("Bash", { command: "git status" }))
+      .toBe("Running git status");
+  });
+
+  test("Bash truncates long commands to 30 chars", () => {
+    const long = "a".repeat(50);
+    expect(toolDescription("Bash", { command: long }))
+      .toBe(`Running ${long.slice(0, 30)}`);
+  });
+
+  test("Bash without command returns fallback", () => {
+    expect(toolDescription("Bash", {})).toBe("Running command");
+  });
+
+  test("Glob with pattern", () => {
+    expect(toolDescription("Glob", { pattern: "**/*.tsx" }))
+      .toBe("Searching **/*.tsx");
+  });
+
+  test("Grep with pattern", () => {
+    expect(toolDescription("Grep", { pattern: "function main" }))
+      .toBe("Searching function main");
+  });
+
+  test("Agent with description", () => {
+    expect(toolDescription("Agent", { description: "Explore codebase structure" }))
+      .toBe("Explore codebase structure");
+  });
+
+  test("Agent truncates long descriptions to 40 chars", () => {
+    const long = "a".repeat(60);
+    expect(toolDescription("Agent", { description: long }))
+      .toBe(long.slice(0, 40));
+  });
+
+  test("WebFetch returns static string", () => {
+    expect(toolDescription("WebFetch", {})).toBe("Fetching URL");
+  });
+
+  test("WebSearch with query", () => {
+    expect(toolDescription("WebSearch", { query: "bun test runner" }))
+      .toBe("Search: bun test runner");
+  });
+
+  test("AskUserQuestion with question", () => {
+    expect(toolDescription("AskUserQuestion", { question: "Which framework do you prefer?" }))
+      .toBe("Question: Which framework do you prefer?");
+  });
+
+  test("unknown tool returns tool name", () => {
+    expect(toolDescription("TodoRead", {})).toBe("TodoRead");
+  });
+
+  test("undefined tool_name returns undefined", () => {
+    expect(toolDescription(undefined, {})).toBeUndefined();
+  });
+
+  test("undefined tool_input still works", () => {
+    expect(toolDescription("Bash", undefined)).toBe("Running command");
   });
 });

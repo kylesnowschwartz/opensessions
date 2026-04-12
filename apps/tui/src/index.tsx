@@ -46,8 +46,6 @@ const SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
 const UNSEEN_ICON = "●";
 const BOLD = TextAttributes.BOLD;
 const DIM = TextAttributes.DIM;
-const SPARK_BLOCKS = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-
 const THEME_NAMES = Object.keys(BUILTIN_THEMES);
 
 const TONE_ICONS: Record<MetadataTone, string> = {
@@ -1082,29 +1080,6 @@ function ThemePicker(props: ThemePickerProps) {
   );
 }
 
-// --- Sparkline ---
-
-function buildSparkline(timestamps: number[], width: number, windowMs: number = 30 * 60 * 1000): string {
-  if (timestamps.length === 0 || width <= 0) return "";
-  const now = Date.now();
-  const start = now - windowMs;
-  const bucketSize = windowMs / width;
-  const buckets = new Array(width).fill(0);
-
-  for (const ts of timestamps) {
-    if (ts < start) continue;
-    const idx = Math.min(width - 1, Math.floor((ts - start) / bucketSize));
-    buckets[idx]++;
-  }
-
-  const max = Math.max(...buckets, 1);
-  return buckets.map((count: number) => {
-    const level = Math.round((count / max) * (SPARK_BLOCKS.length - 1));
-    return SPARK_BLOCKS[level];
-  }).join("");
-}
-
-
 interface AgentListItemProps {
   agent: SessionData["agents"][number];
   palette: Accessor<Theme["palette"]>;
@@ -1117,7 +1092,6 @@ interface AgentListItemProps {
 
 function AgentListItem(props: AgentListItemProps) {
   const P = () => props.palette();
-  const SC = () => props.statusColors();
   const [isDismissHover, setIsDismissHover] = createSignal(false);
   const [isFlash, setIsFlash] = createSignal(false);
 
@@ -1217,12 +1191,22 @@ function AgentListItem(props: AgentListItemProps) {
             </text>
           </box>
 
-          {/* Row 2: thread name */}
-          <Show when={props.agent.threadName}>
-            <text truncate>
-              <span style={{ fg: isUnseen() ? color() : P().overlay0, attributes: { italic: true } }}>{sanitizeThreadName(props.agent.threadName!)}</span>
-            </text>
-          </Show>
+          {/* Row 2: live activity or thread name */}
+          {(() => {
+            const l = label();
+            const showActivity = (l === "working" || l === "waiting") && props.agent.toolDescription;
+            const previewText = showActivity
+              ? props.agent.toolDescription!.slice(0, 60)
+              : props.agent.threadName ? sanitizeThreadName(props.agent.threadName) : undefined;
+            const previewColor = showActivity ? color() : (isUnseen() ? color() : P().overlay0);
+            return (
+              <Show when={previewText}>
+                <text truncate>
+                  <span style={{ fg: previewColor, attributes: { italic: true } }}>{previewText}</span>
+                </text>
+              </Show>
+            );
+          })()}
         </box>
       </box>
     </box>
@@ -1248,7 +1232,6 @@ interface SessionCardProps {
 
 function SessionCard(props: SessionCardProps) {
   const P = () => props.theme().palette;
-  const SC = () => props.statusColors();
 
   // Resolve five-label scheme for session card
   const label = (): "working" | "waiting" | "ready" | "stopped" | "error" => {

@@ -1,9 +1,12 @@
 /**
  * Hook-based Claude Code agent watcher.
  *
- * Receives lifecycle events (UserPromptSubmit, PreToolUse, PermissionRequest,
- * PostToolUse, Stop, Notification) pushed from Claude Code via POST /hook,
- * instead of polling JSONL files.
+ * Receives lifecycle events (SessionStart, UserPromptSubmit, PreToolUse,
+ * PermissionRequest, PostToolUse, Stop, Notification, SessionEnd) pushed
+ * from Claude Code via POST /hook.
+ *
+ * Tool descriptions (e.g. "Reading config.ts") are extracted from PreToolUse
+ * and PermissionRequest payloads and emitted on AgentEvent.toolDescription.
  *
  * JSONL reading is kept for two bounded purposes:
  *   1. Cold-start seed: scan recent files once on startup to bootstrap state
@@ -139,6 +142,8 @@ interface ThreadState {
   threadName?: string;
   projectDir: string;
   nameResolved: boolean;
+  /** Last tool description from PreToolUse/PermissionRequest — cleared on non-tool events */
+  lastToolDescription?: string;
 }
 
 const STALE_MS = 5 * 60 * 1000;
@@ -149,14 +154,65 @@ const WAITING_NOTIFICATION_TYPES = new Set(["permission_prompt"]);
 /** Notification subtypes that confirm the agent is idle at prompt (not waiting for input). */
 const IDLE_NOTIFICATION_TYPES = new Set(["idle_prompt"]);
 
+// --- Tool description generation (ported from seance ctl.zig:1565-1603) ---
+
+/** Generate a human-readable description of the current tool activity. */
+export function toolDescription(toolName: string | undefined, toolInput: Record<string, unknown> | undefined): string | undefined {
+  if (!toolName) return undefined;
+
+  const input = toolInput ?? {};
+
+  switch (toolName) {
+    case "Read": return fileDesc("Reading", input);
+    case "Edit": return fileDesc("Editing", input);
+    case "Write": return fileDesc("Writing", input);
+    case "Bash": {
+      const cmd = typeof input.command === "string" ? input.command : undefined;
+      if (cmd) return `Running ${cmd.slice(0, 30)}`;
+      return "Running command";
+    }
+    case "Glob":
+    case "Grep": {
+      const pattern = typeof input.pattern === "string" ? input.pattern : undefined;
+      if (pattern) return `Searching ${pattern.slice(0, 30)}`;
+      return "Searching";
+    }
+    case "Agent": {
+      const desc = typeof input.description === "string" ? input.description : undefined;
+      if (desc) return desc.slice(0, 40);
+      return "Agent";
+    }
+    case "WebFetch": return "Fetching URL";
+    case "WebSearch": {
+      const query = typeof input.query === "string" ? input.query : undefined;
+      if (query) return `Search: ${query.slice(0, 30)}`;
+      return "Searching web";
+    }
+    case "AskUserQuestion": {
+      const q = typeof input.question === "string" ? input.question : undefined;
+      if (q) return `Question: ${q.slice(0, 50)}`;
+      return "Asking question";
+    }
+    default: return toolName;
+  }
+}
+
+function fileDesc(verb: string, input: Record<string, unknown>): string {
+  const fp = typeof input.file_path === "string" ? input.file_path : undefined;
+  if (fp) return `${verb} ${basename(fp)}`;
+  return verb;
+}
+
 // --- Hook event → status mapping ---
 
 const HOOK_STATUS_MAP: Record<string, AgentStatus> = {
   UserPromptSubmit: "running",
+  SessionStart: "idle",
   PreToolUse: "running",
   PermissionRequest: "waiting",
   PostToolUse: "running",
   Stop: "done",
+  SessionEnd: "done",
   // Notification is handled separately — status depends on notification_type
 };
 
@@ -197,8 +253,10 @@ export class ClaudeCodeHookAdapter implements AgentWatcher, HookReceiver {
 
     const threadId = payload.session_id;
     let state = this.threads.get(threadId);
+    let isNewThread = false;
 
     if (!state) {
+      isNewThread = true;
       state = {
         status: "idle", // Will be overwritten below
         projectDir: payload.cwd,
@@ -209,15 +267,31 @@ export class ClaudeCodeHookAdapter implements AgentWatcher, HookReceiver {
       this.resolveThreadName(threadId, payload.cwd);
     }
 
-    // Deduplicate: don't emit if status hasn't changed
-    if (state.status === newStatus) {
+    // Compute tool description for tool-related events
+    const hasToolContext = payload.event === "PreToolUse" || payload.event === "PermissionRequest";
+    if (hasToolContext) {
+      state.lastToolDescription = toolDescription(payload.tool_name, payload.tool_input);
+    } else if (payload.event !== "PostToolUse") {
+      // Clear tool description on non-tool events (UserPromptSubmit, Stop, etc.)
+      // PostToolUse keeps the prior description since it means a tool just finished
+      state.lastToolDescription = undefined;
+    }
+
+    // Deduplicate: don't emit if status hasn't changed.
+    // Exceptions: always emit for new threads, and for tool events (new tool description).
+    if (state.status === newStatus && !isNewThread && !hasToolContext) {
       dbg("hook", "dedup", { threadId: threadId.slice(0, 8), status: newStatus });
       return;
     }
 
     state.status = newStatus;
-    dbg("hook", "emit", { threadId: threadId.slice(0, 8), session, status: newStatus });
+    dbg("hook", "emit", { threadId: threadId.slice(0, 8), session, status: newStatus, tool: state.lastToolDescription });
     this.emit(threadId, state, session);
+
+    // SessionEnd: clean up thread state — the session is gone
+    if (payload.event === "SessionEnd") {
+      this.threads.delete(threadId);
+    }
   }
 
   /** Map a hook payload to a status, or null if the event should be ignored. */
@@ -244,6 +318,7 @@ export class ClaudeCodeHookAdapter implements AgentWatcher, HookReceiver {
       ts: Date.now(),
       threadId,
       threadName: state.threadName,
+      toolDescription: state.lastToolDescription,
     });
   }
 

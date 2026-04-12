@@ -1,4 +1,4 @@
-import type { AgentStatus, AgentEvent } from "./contracts/agent";
+import type { AgentEvent } from "./contracts/agent";
 import type { MuxSessionInfo } from "./contracts/mux";
 
 export const SERVER_PORT = 7391;
@@ -140,20 +140,3 @@ export const C = {
   crust: "#11111b",
 } as const;
 
-export const STATUS_COLORS: Record<AgentStatus, string> = {
-  idle: C.green,
-  running: C.blue,
-  done: C.green,
-  error: C.red,
-  waiting: C.yellow,
-  interrupted: C.green,
-};
-
-export const STATUS_ICONS: Record<AgentStatus, string> = {
-  idle: "◇",
-  running: "●",
-  done: "◇",
-  error: "✗",
-  waiting: "◉",
-  interrupted: "◇",
-};

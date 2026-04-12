@@ -22,7 +22,7 @@ export { TERMINAL_STATUSES } from "./contracts/agent";
 export type { AgentWatcher, AgentWatcherContext, HookPayload, HookReceiver } from "./contracts/agent-watcher";
 export { isHookReceiver } from "./contracts/agent-watcher";
 export { AgentTracker } from "./agents/tracker";
-export { ClaudeCodeHookAdapter } from "./agents/watchers/claude-code-hooks";
+export { ClaudeCodeHookAdapter, toolDescription } from "./agents/watchers/claude-code-hooks";
 export { MuxRegistry } from "./mux/registry";
 export { detectMux } from "./mux/detect";
 export { PluginLoader } from "./plugins/loader";
@@ -40,8 +40,6 @@ export {
   SERVER_IDLE_TIMEOUT_MS,
   STUCK_RUNNING_TIMEOUT_MS,
   C,
-  STATUS_COLORS,
-  STATUS_ICONS,
 } from "./shared";
 export type {
   SessionData,

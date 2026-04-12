@@ -17,6 +17,8 @@ export interface AgentEvent {
   paneId?: string;
   /** Whether the agent process is alive, exited, or unknown (no pane info) */
   liveness?: AgentLiveness;
+  /** Human-readable description of current activity, e.g. "Reading config.ts" or "Bash: git push" */
+  toolDescription?: string;
 }
 
 export const TERMINAL_STATUSES = new Set<AgentStatus>(["done", "error", "interrupted"]);
