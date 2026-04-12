@@ -727,10 +727,9 @@ function App() {
         {/* Sessions above focused — bottom-aligned so nearest is adjacent */}
         <box flexDirection="column" flexGrow={1} flexBasis={0} justifyContent="flex-end" gap={1} paddingBottom={1}>
           <For each={sessionsBefore()}>
-            {(session, i) => (
+            {(session) => (
               <SessionCard
                 session={session}
-                index={i() + 1}
                 isFocused={false}
                 isCurrent={session.name === currentSession()}
                 spinIdx={spinIdx}
@@ -773,7 +772,6 @@ function App() {
             {(data) => (
               <SessionCard
                 session={data()}
-                index={focusedIdx() + 1}
                 isFocused={true}
                 isCurrent={data().name === currentSession()}
                 spinIdx={spinIdx}
@@ -809,10 +807,9 @@ function App() {
         {/* Sessions below focused */}
         <box flexDirection="column" flexGrow={1} flexBasis={0} gap={1} paddingTop={1}>
           <For each={sessionsAfter()}>
-            {(session, i) => (
+            {(session) => (
               <SessionCard
                 session={session}
-                index={focusedIdx() + 2 + i()}
                 isFocused={false}
                 isCurrent={session.name === currentSession()}
                 spinIdx={spinIdx}
@@ -1198,7 +1195,7 @@ function AgentListItem(props: AgentListItemProps) {
           return (
             <Show when={previewText}>
               <text truncate>
-                <span style={{ fg: previewColor, attributes: { italic: true } }}>{previewText}</span>
+                <span style={{ fg: previewColor, attributes: { italic: true } }}>{"  "}{previewText}</span>
               </text>
             </Show>
           );
@@ -1212,7 +1209,6 @@ function AgentListItem(props: AgentListItemProps) {
 
 interface SessionCardProps {
   session: SessionData;
-  index: number;
   isFocused: boolean;
   isCurrent: boolean;
   spinIdx: Accessor<number>;
@@ -1266,8 +1262,6 @@ function SessionCard(props: SessionCardProps) {
     if (props.isCurrent) return P().subtext1;
     return P().subtext0;
   };
-
-  const indexColor = () => P().surface2;
 
   const truncName = () => {
     const n = props.session.name;
@@ -1357,12 +1351,8 @@ function SessionCard(props: SessionCardProps) {
         flexDirection="row"
         backgroundColor={bgColor()}
         onMouseDown={props.onSelect}
+        paddingLeft={1}
       >
-        {/* Index */}
-        <box width={3} flexShrink={0}>
-          <text style={{ fg: indexColor() }}>{String(props.index).padStart(2)}</text>
-        </box>
-
         {/* Content */}
         <box flexDirection="column" flexGrow={1} paddingRight={1}>
           {/* Row 1: name + agent badge (left) + status icons (right) */}
@@ -1394,7 +1384,7 @@ function SessionCard(props: SessionCardProps) {
               <Show when={props.session.branch}>
                 <text truncate flexGrow={1}>
                   <span style={{ fg: props.isFocused ? P().pink : P().overlay0 }}>
-                    {truncBranch()}
+                    {"⎇ "}{truncBranch()}
                   </span>
                 </text>
               </Show>
@@ -1420,7 +1410,7 @@ function SessionCard(props: SessionCardProps) {
 
       {/* Expanded detail — shown inline when focused */}
       <Show when={props.isFocused}>
-        <box flexDirection="column" paddingLeft={3}>
+        <box flexDirection="column" paddingLeft={1}>
           {/* Directory — only when cwd doesn't match session name */}
           <Show when={dirMismatch()}>
             <text truncate>

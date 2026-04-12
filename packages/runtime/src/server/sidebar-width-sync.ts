@@ -6,16 +6,17 @@ export const MAX_SIDEBAR_WIDTH_PERCENT = 0.4;
 export const SAVE_DEBOUNCE_MS = 1000;
 
 // Layout constants matching the TUI's SessionCard rendering.
-const INDEX_COLS = 3;
+const PADDING_LEFT = 1;
 const PADDING_RIGHT = 1;
 const STATUS_ICON_COLS = 2;        // " ⠋" or " ●"
 const FOCUSED_BORDER = 2;          // <box border> on focused card: 1 col per side
 const NAME_TRUNC_LIMIT = 18;
 const BRANCH_TRUNC_LIMIT = 15;
+const BRANCH_ICON_COLS = 2;         // "⎇ " prefix when branch is present
 
-// Expanded agent list item layout (inside focused card border + paddingLeft={3}):
-//   expandPad(3) + dismiss(2) + name + [threadId] + [unseenBadge] + statusIcon(2) + padRight(1)
-const AGENT_ROW_FIXED = 3 + 2 + 2 + 1; // = 8
+// Expanded agent list item layout (inside focused card border + paddingLeft={1}):
+//   expandPad(1) + dismiss(2) + name + [threadId] + [unseenBadge] + statusIcon(2) + padRight(1)
+const AGENT_ROW_FIXED = 1 + 2 + 2 + 1; // = 6
 const THREAD_ID_COLS = 6;          // " #" + 4 chars (threadId.slice(0, 4))
 
 /**
@@ -39,15 +40,16 @@ export function computeMinSidebarWidth(sessions: SessionData[]): number {
     const nameLen = Math.min(s.name.length, NAME_TRUNC_LIMIT);
     const badge = agentBadgeWidth(s);
     const unseenCols = s.unseen ? 2 : 0; // " ●" when session has unseen agents
-    const nameRow = INDEX_COLS + nameLen + badge + unseenCols + STATUS_ICON_COLS + PADDING_RIGHT;
+    const nameRow = PADDING_LEFT + nameLen + badge + unseenCols + STATUS_ICON_COLS + PADDING_RIGHT;
 
     // Collapsed branch row (renders when branch OR ports are present)
     const portHintLen = portHintWidth(s.ports ?? []);
     const branchLen = s.branch ? Math.min(s.branch.length, BRANCH_TRUNC_LIMIT) : 0;
     let branchRow = 0;
     if (branchLen || portHintLen) {
+      const branchIcon = branchLen ? BRANCH_ICON_COLS : 0;
       const spacer = branchLen && portHintLen ? 1 : 0;
-      branchRow = INDEX_COLS + branchLen + spacer + portHintLen + PADDING_RIGHT;
+      branchRow = PADDING_LEFT + branchIcon + branchLen + spacer + portHintLen + PADDING_RIGHT;
     }
 
     widestContent = Math.max(widestContent, nameRow, branchRow);
