@@ -451,8 +451,13 @@ function App() {
           let startupFocusToPublish: string | null = null;
           batch(() => {
             if (msg.type === "state") {
+              // Only claim focus if this TUI is in the user's current session.
+              // Without this guard, every TUI sends focus-session on reconnect
+              // and the last one to connect wins — producing a random highlight.
+              const isCurrentSession = msg.currentSession === startupSessionName;
               const startupFocus = !startupFocusSynced
                 && startupSessionName
+                && isCurrentSession
                 && msg.sessions.some((session) => session.name === startupSessionName)
                 ? startupSessionName
                 : msg.focusedSession;
@@ -475,7 +480,8 @@ function App() {
               setMySession(msg.name);
               if (msg.clientTty) setClientTty(msg.clientTty);
 
-              if (!startupFocusSynced && sessions.some((session) => session.name === msg.name)) {
+              // Only claim focus if we're in the current session (same guard as state handler)
+              if (!startupFocusSynced && currentSession() === msg.name && sessions.some((session) => session.name === msg.name)) {
                 startupFocusSynced = true;
                 setFocusedSession(msg.name);
                 if (focusedSession() !== msg.name) {

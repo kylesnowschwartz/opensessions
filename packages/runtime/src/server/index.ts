@@ -1750,19 +1750,22 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     refreshPortSnapshot(allMuxSessions);
   }
 
-  // Floor configured width against content — saved config may be stale/too narrow.
-  {
-    const bootState = computeState();
-    const minWidth = computeMinSidebarWidth(bootState.sessions);
-    if (configuredWidth < minWidth) {
-      log("bootstrap", `width ${configuredWidth} < content min ${minWidth}, bumping`);
-      configuredWidth = minWidth;
-      saveConfig({ sidebarWidth: configuredWidth });
-      if (sidebarVisible) enforceSidebarWidth();
-    }
+  // Floor configured width against content — widen if saved config is too narrow.
+  // Runs immediately (with whatever data is available) and again after 2s once
+  // watchers have detected agents, since agent names affect the minimum width.
+  function floorWidthToContent() {
+    if (!lastState) return;
+    const minWidth = computeMinSidebarWidth(lastState.sessions);
+    if (configuredWidth >= minWidth) return;
+    log("bootstrap", `width ${configuredWidth} < content min ${minWidth}, bumping`);
+    configuredWidth = minWidth;
+    saveConfig({ sidebarWidth: configuredWidth });
+    if (sidebarVisible) enforceSidebarWidth();
+    broadcastState();
   }
 
   broadcastState();
+  floorWidthToContent();
   startPortPoll();
   startPaneScan();
   // Run initial pane scan
@@ -1773,6 +1776,9 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     w.start(watcherCtx);
     log("server", `agent watcher started: ${w.name}`);
   }
+
+  // Recheck after watchers have had time to detect agents
+  setTimeout(floorWidthToContent, 2000);
 
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
