@@ -179,7 +179,7 @@ function App() {
   const [focusedAgentIdx, setFocusedAgentIdx] = createSignal(0);
 
   // --- Modal state ---
-  const [modal, setModal] = createSignal<"none" | "theme-picker" | "confirm-kill">("none");
+  const [modal, setModal] = createSignal<"none" | "theme-picker" | "confirm-kill" | "help">("none");
   const [killTarget, setKillTarget] = createSignal<string | null>(null);
   let themeBeforePreview: Theme | null = null;
 
@@ -283,6 +283,10 @@ function App() {
     if (connected() && ws) ws.send(JSON.stringify(cmd));
   }
 
+  // Suppress pane-focus-out events briefly after session switch to prevent
+  // the focus highlight from blinking during tmux's focus handoff.
+  let focusSuppressUntil = 0;
+
   function switchToSession(name: string) {
     // Optimistic local update — makes rapid Tab repeat instant by removing
     // the server/hook round-trip from the next-Tab decision.
@@ -291,6 +295,10 @@ function App() {
     setFocusedSession(name);
     setPanelFocus("sessions");
     setFocusedAgentIdx(0);
+    // Hold paneFocused true during session switch — tmux's focus handoff
+    // briefly unfocuses the sidebar, causing a visible blink.
+    setPaneFocused(true);
+    focusSuppressUntil = Date.now() + 500;
     send({ type: "switch-session", name });
   }
 
@@ -507,7 +515,11 @@ function App() {
               }
             } else if (msg.type === "pane-focus") {
               if (muxCtx.type !== "none") {
-                setPaneFocused(msg.paneId === muxCtx.paneId);
+                const isFocused = msg.paneId === muxCtx.paneId;
+                // During session switch, suppress transient unfocus to prevent blink
+                if (isFocused || Date.now() >= focusSuppressUntil) {
+                  setPaneFocused(isFocused);
+                }
               }
             } else if (msg.type === "re-identify") {
               reIdentify();
@@ -579,6 +591,12 @@ function App() {
 
     // --- Theme picker modal: input handles all keys via onKeyDown ---
     if (currentModal === "theme-picker") {
+      return;
+    }
+
+    // --- Help modal: any key dismisses ---
+    if (currentModal === "help") {
+      setModal("none");
       return;
     }
 
@@ -706,6 +724,9 @@ function App() {
       case "n":
       case "c":
         createNewSession();
+        break;
+      case "?":
+        setModal("help");
         break;
       default: {
         if (key.number) {
@@ -899,7 +920,9 @@ function App() {
                 <span style={{ fg: keyFg() }}>{"d"}</span>
                 <span style={{ fg: labelFg() }}>{" dismiss  "}</span>
                 <span style={{ fg: keyFg() }}>{"x"}</span>
-                <span style={{ fg: labelFg() }}>{" kill"}</span>
+                <span style={{ fg: labelFg() }}>{" kill  "}</span>
+                <span style={{ fg: keyFg() }}>{"?"}</span>
+                <span style={{ fg: labelFg() }}>{" help"}</span>
               </text>
             }>
               <text>
@@ -909,8 +932,8 @@ function App() {
                 <span style={{ fg: labelFg() }}>{" go  "}</span>
                 <span style={{ fg: keyFg() }}>{"d"}</span>
                 <span style={{ fg: labelFg() }}>{" hide  "}</span>
-                <span style={{ fg: keyFg() }}>{"x"}</span>
-                <span style={{ fg: labelFg() }}>{" kill"}</span>
+                <span style={{ fg: keyFg() }}>{"?"}</span>
+                <span style={{ fg: labelFg() }}>{" help"}</span>
               </text>
             </Show>
           </box>
@@ -969,6 +992,55 @@ function App() {
               <span style={{ fg: P().overlay1 }}>/</span>
               <span style={{ fg: P().overlay0 }}>n</span>
             </text>
+          </box>
+        </box>
+      </Show>
+
+      {/* Help overlay */}
+      <Show when={modal() === "help"}>
+        <box
+          position="absolute"
+          top={0} left={0} right={0} bottom={0}
+          justifyContent="center"
+          alignItems="center"
+          backgroundColor="transparent"
+        >
+          <box
+            border
+            borderStyle="rounded"
+            borderColor={P().blue}
+            backgroundColor={P().mantle}
+            paddingX={2}
+            paddingY={1}
+            flexDirection="column"
+          >
+            <text><span style={{ fg: P().text, attributes: BOLD }}>Keybindings</span></text>
+            <box height={1}><text style={{ fg: P().surface2 }}>{"─".repeat(200)}</text></box>
+            {([
+              ["j/k", "navigate"],
+              ["⏎", "switch to session"],
+              ["⇥", "cycle next"],
+              ["⇧⇥", "cycle prev"],
+              ["→/l", "agent detail"],
+              ["←/h", "back to sessions"],
+              ["d", "hide / dismiss"],
+              ["u", "unhide all"],
+              ["x", "kill session / pane"],
+              ["n/c", "new session"],
+              ["r", "refresh"],
+              ["t", "theme picker"],
+              ["=", "equalize widths"],
+              ["⌥↑↓", "reorder"],
+              ["1-9", "jump to session"],
+              ["q", "quit"],
+            ] as const).map(([k, v]) => (
+              <text>
+                <span style={{ fg: P().text }}>{k.padEnd(7)}</span>
+                <span style={{ fg: P().subtext0 }}>{v}</span>
+              </text>
+            ))}
+            <box height={1} />
+            <text><span style={{ fg: P().overlay0 }}>press any key to close</span></text>
           </box>
         </box>
       </Show>
