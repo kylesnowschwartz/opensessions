@@ -1,5 +1,6 @@
 import {
   ClaudeCodeHookAdapter,
+  PiHookAdapter,
   PluginLoader,
   SERVER_HOST,
   SERVER_PORT,
@@ -60,6 +61,7 @@ if (extraProviders.length > 0) {
 }
 
 loader.registerWatcher(new ClaudeCodeHookAdapter());
+loader.registerWatcher(new PiHookAdapter());
 
 const watchers = loader.getWatchers();
 if (watchers.length > 0) {

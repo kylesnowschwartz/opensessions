@@ -23,6 +23,7 @@ export type { AgentWatcher, AgentWatcherContext, HookPayload, HookReceiver } fro
 export { isHookReceiver } from "./contracts/agent-watcher";
 export { AgentTracker } from "./agents/tracker";
 export { ClaudeCodeHookAdapter, toolDescription } from "./agents/watchers/claude-code-hooks";
+export { PiHookAdapter, piToolDescription } from "./agents/watchers/pi-hooks";
 export { MuxRegistry } from "./mux/registry";
 export { detectMux } from "./mux/detect";
 export { PluginLoader } from "./plugins/loader";
