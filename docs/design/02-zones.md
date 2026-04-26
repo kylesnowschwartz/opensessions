@@ -211,7 +211,11 @@ Heights:
 - On narrow terminals (height < 30): visible-entry cap = 3 (zone = 5
   cells).
 - Above the cap: older entries scroll off the top. Buffer holds 200
-  in memory (unchanged from existing `metadata.logs` behaviour).
+  entries per session in memory; survives focus changes; resets only on
+  session close. Producers (the agent watchers) push entries via the
+  server's `/log` endpoint as tool calls, state transitions, and thread
+  name changes occur — see `03-vocabulary.md` §7 “Producers” for the
+  full mapping.
 
 ### Layout
 

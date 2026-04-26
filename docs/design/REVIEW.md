@@ -220,8 +220,14 @@ revisions applied"), implementation proceeds in two phases:
    own PR:
    - Stage 1: `--mock` flag + vocabulary swap + 4-tier helpers
    - Stage 2: two-gutter grammar + chevron wrap rules
-   - Stage 3: always-visible activity zone (rendering against the
-     existing `metadata.logs` buffer)
+   - Stage 3: always-visible activity zone (rendering surface against
+     the `metadata.logs` buffer)
+   - **Stage 3.5: producer wiring** — teach the agent watchers to push
+     tool calls, state transitions, and thread name changes into
+     `metadata.logs` via the server's `/log` endpoint, then retire the
+     per-agent inline activity row that the activity zone subsumes.
+     Closes a gap in the original plan, which assumed the buffer was
+     already populated. See `03-vocabulary.md` §7 “Producers”.
    - Stage 4: ports feature deletion + production promotion (remove
      the `--mock` gate)
    - Stage 5: statusline propagation per `03-vocabulary.md` §6

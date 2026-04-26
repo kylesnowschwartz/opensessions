@@ -405,6 +405,24 @@ attribute change inside the zone (per the freshness rule in §4).
   - `cc 1859` (claude-code), `pi 15c8`, `cd a3b1` (codex), `ap 89c2` (amp)
 - System events: `[info]` / `[warn]` / `[error]` in tone colours
 
+### Producers (locked)
+
+Until this redesign, `metadata.logs` was a typed-and-rendered buffer
+that nothing actually pushed to in production. The activity zone makes
+the buffer load-bearing, so producers are now spec’d.
+
+| Watcher                                  | Event                                | Emits                                                       |
+|------------------------------------------|--------------------------------------|-------------------------------------------------------------|
+| `claude-code-hooks.ts` / `pi-hooks.ts`   | tool call started                    | `{ source: "<code> <id>", message: "<tool name>", tone: "info" }` |
+| same                                     | tool call finished (with outcome)    | `{ source: "<code> <id>", message: "ran  <cmd> (passed)", tone: "success" }` (or `(failed)` + `"error"`) |
+| same                                     | agent state transition               | `{ source: "<code> <id>", message: "<state>", tone: "info"\|"error" }` |
+| same                                     | new thread name                      | `{ source: "<code> <id>", message: "<thread name>", tone: "neutral" }` |
+| any (server-side)                        | system event                         | `{ source: "[info]"\|"[warn]"\|"[error]", message: "...", tone: <matching> }` |
+
+Producers POST to the server’s existing `/log` HTTP endpoint
+(`packages/runtime/src/server/index.ts`); the server appends to
+`metadata.logs` and broadcasts state. No new wire protocol.
+
 ### Persistence (locked)
 
 - Each session keeps a rolling buffer of events (cap: 200 in memory).
