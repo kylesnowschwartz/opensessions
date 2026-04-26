@@ -1,0 +1,9 @@
+[project]
+name = "opensessions"
+version = "0.10.0"
+
+[lifecycle]
+preset = "default-5"
+
+[ide]
+targets = ["claude-code"]

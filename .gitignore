@@ -4,3 +4,8 @@ dist
 *.log
 .agents/skills/grill-me/
 tree/
+# Ephemeral agent session state
+.aos/
+# Praxis install backups
+.ide_backup/
+SPECKY-ROUTING.md
