@@ -1,8 +1,8 @@
 # Spec: opensessions tmux header
 
-**Status:** v1 — MVP (presence-only, per-agent-type glyph)
+**Status:** v1.1 — severity-aware glyph colour, per-agent-type identity
 **Origin ticket:** TMUX-HEADER-001
-**Last updated:** 2026-04-26
+**Last updated:** 2026-05 (Stage 5 of side-panel redesign)
 
 This spec is the lasting reference for the opensessions tmux status line. It defines the option contract, the agent glyph table, and the read/write protocol between the opensessions server and tmux. Implementation lives in `packages/runtime/src/server/tmux-header-sync.ts` and `integrations/tmux-plugin/scripts/header.tmux`.
 
@@ -13,14 +13,14 @@ This spec is the lasting reference for the opensessions tmux status line. It def
 ### Goals
 - Replace third-party tmux themes with a status line whose colours and iconography track the active opensessions theme (`packages/runtime/src/themes.ts`).
 - Surface an at-a-glance per-window glyph for tmux windows that contain a live agent process (Claude Code, Pi, Codex, …), to aid tab navigation.
+- **Severity-aware glyph colour.** The per-window glyph is painted in the colour of the dominant agent's severity (working / waiting / ready / stopped / error), so the tab strip doubles as a hands-off status board. Mirrors the panel's left-gutter severity colours; see `docs/design/03-vocabulary.md` §6. *(Lifted to v1 in v1.1.)*
 - Keep the integration zero-cost on the tmux status repaint hot path (no `#(...)` shell expansions for agent state).
 
-### Non-goals (v1)
-- Agent **status** differentiation (idle/running/error). v1 is presence-only.
-- Per-agent-type colour. v1 paints all glyphs in `theme.blue`.
+### Non-goals (v1.1)
+- Per-agent-type colour. The glyph identifies *which* agent; severity colour answers *what state*. They share the same cell.
 - Per-session palette divergence. v1 writes `@os-thm-*` at the global scope.
 - Tooltip / hover-reveal of agent metadata.
-- Multi-agent rendering in a single cell (e.g. "two glyphs"). Precedence picks one.
+- Multi-agent rendering in a single cell (e.g. "two glyphs"). Precedence picks one identity *and* its severity.
 
 ---
 
@@ -63,7 +63,7 @@ The server is the single writer; tmux is a passive reader. Status-line repaint n
 | Option | Type | Meaning |
 |---|---|---|
 | `@os-agent` | string (single-cell glyph) | Glyph for the dominant agent type in this window. Unset when no live agent is present. |
-| `@os-agent-fg` | hex string (`#rrggbb`) | Foreground colour for the glyph. v1: always `theme.palette.blue`. |
+| `@os-agent-fg` | hex string (`#rrggbb`) or `default` | Foreground colour for the glyph. Resolved per-window from the dominant agent's severity: `working`→`palette.blue`, `waiting`→`palette.yellow`, `ready`→`palette.green`, `stopped`→`palette.surface2`, `error`→`palette.red`. The mapping is locked in `severityColour()` in `tmux-header-sync.ts` and mirrors the panel's left-gutter resolver. |
 | `@os-agent-type` | string | Agent name (`claude-code`, `pi`, `codex`, `amp`, …) of the dominant agent. For introspection / future variants. |
 
 Lifetime:
@@ -104,7 +104,7 @@ Lifetime: re-written when the server detects a theme change. Otherwise stable.
 | `pi` | `π` | U+03C0 GREEK SMALL LETTER PI | |
 | `codex` | `▲` | U+25B2 BLACK UP-POINTING TRIANGLE | |
 | `amp` | `♦` | U+2666 BLACK DIAMOND SUIT | |
-| `generic` | `●` | U+25CF BLACK CIRCLE | Fallback when no specific entry exists. |
+| `generic` |  | U+F167A nf-md-robot-outline | Fallback when no specific entry exists. Aligns with the panel's right-gutter `ID_GENERIC`. |
 
 ### 4.1. Clawd auto-detect
 
@@ -185,6 +185,8 @@ Sourced from `opensessions.tmux` when `@opensessions-header == on`. Sets:
 
 **Inactive-tab readability.** Inactive windows render with `fg=default` rather than a fixed `@os-thm-overlay0` colour. The opensessions theme palette is calibrated for dark terminal backgrounds; users running light terminal palettes (`the-themer` switches both) would see overlay grays as illegible. Letting the terminal palette dictate inactive-tab fg, and using `bold + theme.blue` for the active tab, keeps differentiation regardless of light/dark.
 
+**Active-window vs. severity-colour collision.** When the active window's agent is `working`, both `window-status-current-style` and `@os-agent-fg` resolve to `theme.blue`, so colour alone can't differentiate "this is the active tab" from "this glyph means working." Resolution: the active style carries `bold`; the inline `#[fg=@os-agent-fg]` overrides the *colour* but inherits the segment-level `bold`, so the active working glyph renders bold-blue while inactive working glyphs render plain blue. When severity is anything other than `working`, both colour *and* weight differentiate. No special-case in the format string — tmux's existing attribute inheritance handles it. See `docs/design/03-vocabulary.md` §6 "Active-window vs. severity colour collision".
+
 The `#{?@os-thm-base,#{@os-thm-base},default}` chain ensures the status line is readable on first paint before the server has written palette options.
 
 ---
@@ -223,9 +225,9 @@ Live verification on a real tmux server is recorded in the blueprint as L1–L3 
 
 ---
 
-## 9. Future work (not in v1)
+## 9. Future work (not in v1.1)
 
-- Status-aware glyph: extend `@os-agent` lookup to use `theme.icons[status]` when `@opensessions-header-status-aware == on`.
+- Per-status glyph swap: extend `@os-agent` lookup to also vary the *glyph* by status (e.g. severity-glyph overlay) when `@opensessions-header-status-aware == on`. Today only the colour varies; the glyph is identity-only.
 - Per-agent-type colour: `theme.status[status]` or a separate `@os-agent-type-fg` palette.
 - Tooltip via `@os-agent-tooltip` and tmux `#{T:...}` formats.
 - Per-session palette overrides (different theme per tmux session).

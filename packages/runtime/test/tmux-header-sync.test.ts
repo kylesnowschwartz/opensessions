@@ -7,6 +7,8 @@ import {
   pickAgentForWindow,
   planTmuxHeaderSync,
   syncTmuxHeaderOptions,
+  severityLabel,
+  severityColour,
   __resetTmuxHeaderSyncStateForTests,
   type PlanInput,
   type SyncedState,
@@ -20,6 +22,10 @@ import type { AgentEvent } from "../src/contracts/agent";
 const THEME = resolveTheme("catppuccin-mocha");
 const THEME_NAME = "catppuccin-mocha";
 const BLUE = THEME.palette.blue;
+const YELLOW = THEME.palette.yellow;
+const GREEN = THEME.palette.green;
+const RED = THEME.palette.red;
+const SURFACE2 = THEME.palette.surface2;
 
 function makeAgent(o: Partial<AgentEvent> & { agent: string; session: string; paneId?: string }): AgentEvent {
   return {
@@ -291,6 +297,119 @@ describe("planTmuxHeaderSync", () => {
     const sessions = [makeSession("s1", [makeAgent({ agent: "claude-code", session: "s1" })])];
     const out = planTmuxHeaderSync(emptyInput({ sessions, paneToWindow: new Map() }));
     expect(out.newWindows.size).toBe(0);
+  });
+});
+
+// --- Severity-aware glyph colour (Stage 5) ---
+//
+// Mirrors the panel's status→colour map. Whenever these tests change, the
+// panel resolver in `apps/tui/src/index.tsx` (search `working/waiting/ready`)
+// must move in lockstep. See docs/design/03-vocabulary.md §6.
+
+describe("severityLabel (resolver)", () => {
+  test("running → working", () => {
+    expect(severityLabel("running", "alive")).toBe("working");
+  });
+  test("waiting → waiting", () => {
+    expect(severityLabel("waiting", "alive")).toBe("waiting");
+  });
+  test("error → error (regardless of liveness)", () => {
+    expect(severityLabel("error", "alive")).toBe("error");
+    expect(severityLabel("error", "exited")).toBe("error");
+  });
+  test("done + alive → ready (process is at prompt)", () => {
+    expect(severityLabel("done", "alive")).toBe("ready");
+  });
+  test("done + exited → stopped", () => {
+    expect(severityLabel("done", "exited")).toBe("stopped");
+  });
+  test("interrupted + exited → stopped", () => {
+    expect(severityLabel("interrupted", "exited")).toBe("stopped");
+  });
+  test("idle + alive → ready", () => {
+    expect(severityLabel("idle", "alive")).toBe("ready");
+  });
+  test("null status with no liveness defaults to ready (cold-start synthetic)", () => {
+    expect(severityLabel(null, undefined)).toBe("ready");
+  });
+});
+
+describe("severityColour (palette mapping)", () => {
+  test("working uses theme.blue", () => {
+    const a = makeAgent({ agent: "claude-code", session: "s1", status: "running", liveness: "alive" });
+    expect(severityColour(a, THEME)).toBe(BLUE);
+  });
+  test("waiting uses theme.yellow", () => {
+    const a = makeAgent({ agent: "claude-code", session: "s1", status: "waiting", liveness: "alive" });
+    expect(severityColour(a, THEME)).toBe(YELLOW);
+  });
+  test("ready uses theme.green", () => {
+    const a = makeAgent({ agent: "claude-code", session: "s1", status: "done", liveness: "alive" });
+    expect(severityColour(a, THEME)).toBe(GREEN);
+  });
+  test("stopped uses theme.surface2", () => {
+    const a = makeAgent({ agent: "claude-code", session: "s1", status: "done", liveness: "exited" });
+    expect(severityColour(a, THEME)).toBe(SURFACE2);
+  });
+  test("error uses theme.red", () => {
+    const a = makeAgent({ agent: "claude-code", session: "s1", status: "error", liveness: "alive" });
+    expect(severityColour(a, THEME)).toBe(RED);
+  });
+});
+
+describe("planTmuxHeaderSync severity-aware fg", () => {
+  test("waiting agent emits @os-agent-fg = yellow", () => {
+    const sessions = [makeSession("s1", [makeAgent({ agent: "claude-code", session: "s1", paneId: "%10", status: "waiting" })])];
+    const paneToWindow = new Map([["%10", "@1"]]);
+    const out = planTmuxHeaderSync(emptyInput({ sessions, paneToWindow }));
+    expect(out.newWindows.get("@1")?.fg).toBe(YELLOW);
+  });
+
+  test("errored agent emits @os-agent-fg = red", () => {
+    const sessions = [makeSession("s1", [makeAgent({ agent: "pi", session: "s1", paneId: "%20", status: "error" })])];
+    const paneToWindow = new Map([["%20", "@2"]]);
+    const out = planTmuxHeaderSync(emptyInput({ sessions, paneToWindow }));
+    expect(out.newWindows.get("@2")?.fg).toBe(RED);
+  });
+
+  test("alive 'done' agent emits @os-agent-fg = green (ready, at prompt)", () => {
+    const sessions = [makeSession("s1", [makeAgent({ agent: "codex", session: "s1", paneId: "%30", status: "done", liveness: "alive" })])];
+    const paneToWindow = new Map([["%30", "@3"]]);
+    const out = planTmuxHeaderSync(emptyInput({ sessions, paneToWindow }));
+    expect(out.newWindows.get("@3")?.fg).toBe(GREEN);
+  });
+
+  test("severity uses the dominant agent (claude-code precedence over pi)", () => {
+    // Window has waiting pi + working claude-code. Dominant agent is
+    // claude-code by precedence; fg should reflect claude-code's working.
+    const sessions = [makeSession("s1", [
+      makeAgent({ agent: "pi", session: "s1", paneId: "%40", status: "waiting" }),
+      makeAgent({ agent: "claude-code", session: "s1", paneId: "%41", status: "running" }),
+    ])];
+    const paneToWindow = new Map([["%40", "@4"], ["%41", "@4"]]);
+    const out = planTmuxHeaderSync(emptyInput({ sessions, paneToWindow }));
+    expect(out.newWindows.get("@4")?.agent).toBe("claude-code");
+    expect(out.newWindows.get("@4")?.fg).toBe(BLUE);
+  });
+
+  test("status change without agent-type change re-emits a new fg", () => {
+    const paneToWindow = new Map([["%10", "@1"]]);
+    const first = planTmuxHeaderSync(emptyInput({
+      sessions: [makeSession("s1", [makeAgent({ agent: "claude-code", session: "s1", paneId: "%10", status: "running" })])],
+      paneToWindow,
+    }));
+    expect(first.newWindows.get("@1")?.fg).toBe(BLUE);
+
+    const second = planTmuxHeaderSync(emptyInput({
+      sessions: [makeSession("s1", [makeAgent({ agent: "claude-code", session: "s1", paneId: "%10", status: "waiting" })])],
+      paneToWindow,
+      prevWindows: first.newWindows,
+      prevPalette: first.newPalette,
+    }));
+    // fg flipped; the diff should write three @os-agent* options for @1.
+    expect(second.newWindows.get("@1")?.fg).toBe(YELLOW);
+    const writes = second.commands.filter((c) => c[1] === "-w" && c[3] === "@1");
+    expect(writes.length).toBe(3);
   });
 });
 

@@ -297,26 +297,35 @@ When the panel-side vocabulary lands, the following must propagate to
 (separate PR is fine; same release is required so the two surfaces
 stay aligned):
 
-- [ ] **`AGENT_GLYPHS` table:** change `generic: "●"` to
+- [x] **`AGENT_GLYPHS` table:** change `generic: "●"` to
   `generic: "\u{F167A}"` (nf-md robot-outline). All other entries
   already match the panel.
-- [ ] **Severity-aware glyph colour:** `computeWindowStates()` currently
-  pins `fg = theme.palette.blue` for every glyph. Replace with a
-  per-agent severity lookup (working=blue, waiting=yellow, ready=green,
-  stopped=surface2, error=red). Reuse the panel's status→colour
-  resolver if extracted into `runtime/themes.ts`.
-- [ ] **Active-window collision:** verify that the format string in
-  `integrations/tmux-plugin/scripts/header.tmux` carries `bold` for
-  active windows but does NOT also force a colour override on the
-  glyph. Active text gets bold; severity gets colour. They differentiate
-  by weight when both are blue.
-- [ ] **Spec update:** edit `docs/specs/tmux-header.md` to lift the
-  "presence-only" non-goal from §1 (severity-aware glyph is now v1) and
-  to update the `generic` row of the AGENT_GLYPHS table at §4.
-- [ ] **Test coverage:** the existing
-  `packages/runtime/test/tmux-header-sync.test.ts` covers the table and
-  the diff-driven cleanup. Add a case that exercises the severity
-  lookup so the new behaviour is locked.
+- [x] **Severity-aware glyph colour:** `computeWindowStates()` resolves
+  `@os-agent-fg` per-window from the dominant agent's severity
+  (working=blue, waiting=yellow, ready=green, stopped=surface2,
+  error=red) via the local `severityLabel()` + `severityColour()` in
+  `tmux-header-sync.ts`. The panel's resolver in `apps/tui/src/index.tsx`
+  remains a separate copy for now — the doc-anchor at the top of those
+  helpers tracks the divergence; extract to `runtime/themes.ts` if a
+  third surface lands.
+- [x] **Active-window collision:** confirmed in
+  `integrations/tmux-plugin/scripts/header.tmux`. The format uses
+  inline `#[fg=#{@os-agent-fg}]` (colour-only override); `bold` lives
+  on the segment-level `window-status-current-style`. tmux inherits
+  `bold` through the inline span, so an active working glyph renders
+  bold-blue while inactive working glyphs render plain blue — weight
+  differentiates the active tab when severity colour collides with
+  `theme.blue`. No format-string change required.
+- [x] **Spec update:** `docs/specs/tmux-header.md` is now v1.1. §1 lifts
+  the "presence-only" non-goal; §3.1 documents the severity→palette
+  mapping; §4 updates the `generic` row; §6 documents the active-window
+  collision rule; §9 retires the now-shipped "status-aware glyph"
+  future-work bullet.
+- [x] **Test coverage:** `packages/runtime/test/tmux-header-sync.test.ts`
+  adds 18 new cases covering `severityLabel`, `severityColour`, the
+  per-status fg writes, multi-agent precedence (severity follows the
+  picked agent), and a status-flip diff that re-emits `@os-agent-fg`
+  without changing the glyph identity.
 
 These can land as their own PR after the panel work; the panel does not
 block on them. But the design is incomplete until both surfaces share

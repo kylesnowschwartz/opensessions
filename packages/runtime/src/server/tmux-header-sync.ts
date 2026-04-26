@@ -9,7 +9,8 @@
 import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import type { SessionData } from "../shared";
+import type { SessionData } from "./../shared";
+import type { AgentEvent, AgentStatus, AgentLiveness } from "../contracts/agent";
 import type { Theme } from "../themes";
 
 // --- Glyph table ---
@@ -36,11 +37,11 @@ export function isClawdInstalled(): boolean {
 
 export function buildAgentGlyphs(opts: { clawdInstalled: boolean }): Record<string, string> {
   return {
-    "claude-code": opts.clawdInstalled ? "\u{100CC0}" : "★",
-    "pi": "π",
-    "codex": "▲",
-    "amp": "♦",
-    "generic": "●",
+    "claude-code": opts.clawdInstalled ? "\u{100CC0}" : "\u2605",
+    "pi": "\u03C0",
+    "codex": "\u25B2",
+    "amp": "\u2666",
+    "generic": "\u{F167A}",
   };
 }
 
@@ -158,7 +159,7 @@ function toTmuxColour(value: string): string {
 
 function computeWindowStates(input: PlanInput): SyncedState {
   // Group alive agents by tmux windowId.
-  const windowAgents = new Map<string, string[]>();
+  const windowAgents = new Map<string, AgentEvent[]>();
   for (const session of input.sessions) {
     for (const agent of session.agents) {
       if (agent.liveness !== "alive") continue;
@@ -167,19 +168,54 @@ function computeWindowStates(input: PlanInput): SyncedState {
       const windowId = input.paneToWindow.get(paneId);
       if (!windowId) continue;
       const list = windowAgents.get(windowId) ?? [];
-      list.push(agent.agent);
+      list.push(agent);
       windowAgents.set(windowId, list);
     }
   }
 
-  const fg = toTmuxColour(input.theme.palette.blue);
   const result: SyncedState = new Map();
   for (const [windowId, agents] of windowAgents) {
-    const dominant = pickAgentForWindow(agents);
-    const glyph = AGENT_GLYPHS[dominant] ?? AGENT_GLYPHS["generic"]!;
-    result.set(windowId, { glyph, fg, agent: dominant });
+    const dominantName = pickAgentForWindow(agents.map((a) => a.agent));
+    const dominant = agents.find((a) => a.agent === dominantName) ?? agents[0]!;
+    const glyph = AGENT_GLYPHS[dominantName] ?? AGENT_GLYPHS["generic"]!;
+    const fg = toTmuxColour(severityColour(dominant, input.theme));
+    result.set(windowId, { glyph, fg, agent: dominantName });
   }
   return result;
+}
+
+// --- Severity colour resolution ---
+//
+// Mirrors the panel's status→colour map (apps/tui/src/index.tsx). When/if
+// these diverge, extract a shared resolver into `runtime/themes.ts` per the
+// note in `docs/design/03-vocabulary.md` §6 implementer checklist. Today
+// they're small enough that two copies + a vocabulary doc + tests is
+// cheaper than the cross-package coupling.
+
+/** Five-state severity label, derived from agent status + liveness.
+ *  Mirrors the panel's resolver; see vocabulary doc §6. */
+export type SeverityLabel = "working" | "waiting" | "ready" | "stopped" | "error";
+
+export function severityLabel(status: AgentStatus | null, liveness: AgentLiveness | undefined): SeverityLabel {
+  if (status === "running") return "working";
+  if (status === "waiting") return "waiting";
+  if (status === "error") return "error";
+  // done / interrupted / idle / null — liveness disambiguates.
+  if (liveness === "alive") return "ready";
+  if (status === "done" || status === "interrupted") return "stopped";
+  return "ready";
+}
+
+/** Resolve the tmux fg colour for a given agent's severity. */
+export function severityColour(agent: AgentEvent, theme: Theme): string {
+  const label = severityLabel(agent.status, agent.liveness);
+  switch (label) {
+    case "working": return theme.palette.blue;
+    case "waiting": return theme.palette.yellow;
+    case "ready":   return theme.palette.green;
+    case "stopped": return theme.palette.surface2;
+    case "error":   return theme.palette.red;
+  }
 }
 
 // --- Shell adapter ---
