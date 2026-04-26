@@ -425,11 +425,8 @@ function App() {
       if (ports.length > 0) h += Math.ceil(ports.length / 3);
 
       const agents = session.agents ?? [];
-      for (const agent of agents) {
-        h++; // agent row
-        if (agent.threadName) {
-          h += wrapLines(sanitizeThreadName(agent.threadName));
-        }
+      for (const _agent of agents) {
+        h++; // agent row — single line now (Row 2 retired in favour of ActivityZone)
       }
       // no gap between agents — card border provides visual grouping
 
@@ -1477,22 +1474,9 @@ function AgentListItem(props: AgentListItemProps) {
           </text>
         </box>
 
-        {/* Row 2: live activity or thread name */}
-        {(() => {
-          const l = label();
-          const showActivity = (l === "working" || l === "waiting") && props.agent.toolDescription;
-          const previewText = showActivity
-            ? props.agent.toolDescription!.slice(0, 60)
-            : props.agent.threadName ? sanitizeThreadName(props.agent.threadName) : undefined;
-          const previewColor = showActivity ? color() : (isUnseen() ? color() : P().overlay0);
-          return (
-            <Show when={previewText}>
-              <text truncate>
-                <span style={{ fg: previewColor, attributes: { italic: true } }}>{"· "}{previewText}</span>
-              </text>
-            </Show>
-          );
-        })()}
+        {/* Row 2 (tool description / thread name) retired — now surfaced
+            in the standalone ActivityZone, persistently and across focus
+            changes. See docs/design/03-vocabulary.md §7. */}
       </box>
     </box>
   );
