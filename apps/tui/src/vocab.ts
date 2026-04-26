@@ -46,6 +46,14 @@ export const ID_CODEX = "\u{25B2}";          // ▲
 export const ID_AMP = "\u{2666}";            // ♦
 export const ID_GENERIC = "\u{F167A}";       // nf-md-robot-outline
 
+// ── Statusline-only glyphs (tmux header) ──
+// These never appear in the panel — the panel uses agent identity glyphs
+// or severity glyphs in those positions. They're declared here so the
+// vocabulary doc has a single source of truth across surfaces.
+// See `integrations/tmux-plugin/scripts/header.tmux` for usage.
+export const STATUSLINE_SHELL = "\u{EA85}";    // nf-cod-terminal (boxed >_)
+export const STATUSLINE_LAST_WINDOW = "\u{F08C0}"; // last-visited-window marker
+
 /** Resolve an identity glyph for a known agent type, falling back to generic. */
 export function identityGlyph(agent: string): string {
   switch (agent) {

@@ -176,16 +176,33 @@ Sourced from `opensessions.tmux` when `@opensessions-header == on`. Sets:
 | `status-justify` | `left` |
 | `status-style` | `fg=default,bg=#{?@os-thm-base,#{@os-thm-base},default}` |
 | `window-status-style` | `fg=default` |
-| `window-status-current-style` | `fg=#{?@os-thm-blue,#{@os-thm-blue},default},bold` |
-| `window-status-format` | `<space>#{?@os-agent,#[fg=#{@os-agent-fg}]#{@os-agent}#[default] ,}#I:#{=12:#{b:pane_current_path}}#{?window_zoomed_flag,Z,}<space>` |
-| `window-status-current-format` | identical to `window-status-format` (active-window styling carried by `window-status-current-style`) |
+| `window-status-current-style` | `fg=#{?@os-thm-blue,#{@os-thm-blue},default},bg=#{?@os-thm-surface0,#{@os-thm-surface0},default},bold` |
+| `window-status-format` | `<space>{glyph-slot}<space>#I<space>#W{zoom?}{last-flag?}<space>` — see vocabulary below |
+| `window-status-current-format` | structurally identical to `window-status-format`. Differs only in the post-glyph reset: inactive falls back to `#[default]` (segment style = no bg); active falls back to the pill style (`bg=surface0,fg=blue,bold`). |
 | `window-status-separator` | single space — paired with the trailing pad above gives 2 cells between tabs |
 | `status-left` | session-name pill in `theme.blue`. Ends with `#[default]` and **no trailing space** — windows carry their own leading pad, so adding one here would render with `bg=default` and produce a stray cell when the terminal default differs from the bar's bg. |
 | `status-right` | preserved oh-my-tmux semantic content (prefix, pairing, sync) |
 
 **Inactive-tab readability.** Inactive windows render with `fg=default` rather than a fixed `@os-thm-overlay0` colour. The opensessions theme palette is calibrated for dark terminal backgrounds; users running light terminal palettes (`the-themer` switches both) would see overlay grays as illegible. Letting the terminal palette dictate inactive-tab fg, and using `bold + theme.blue` for the active tab, keeps differentiation regardless of light/dark.
 
-**Active-window vs. severity-colour collision.** When the active window's agent is `working`, both `window-status-current-style` and `@os-agent-fg` resolve to `theme.blue`, so colour alone can't differentiate "this is the active tab" from "this glyph means working." Resolution: the active style carries `bold`; the inline `#[fg=@os-agent-fg]` overrides the *colour* but inherits the segment-level `bold`, so the active working glyph renders bold-blue while inactive working glyphs render plain blue. When severity is anything other than `working`, both colour *and* weight differentiate. No special-case in the format string — tmux's existing attribute inheritance handles it. See `docs/design/03-vocabulary.md` §6 "Active-window vs. severity colour collision".
+**Active-window pill background.** Active tabs render on `theme.surface0` (a subtle bg slightly lighter than `theme.base`); inactive tabs use `bg=default` (terminal background). This adds bg-based differentiation on top of the existing fg+bold, so the active tab is identifiable even when its severity colour also resolves to `theme.blue`. The pill is a single-segment background — no rounded edges, no dividers — to stay zero-cost on the status repaint hot path.
+
+**Active-window vs. severity-colour collision.** When the active window's agent is `working`, both the pill style and `@os-agent-fg` resolve to `theme.blue`, so fg alone can't differentiate "this is the active tab" from "this glyph means working." Resolution: the active style carries `bold` and a `bg=surface0` pill; the inline `#[fg=@os-agent-fg]` overrides the *fg* only, so an active working glyph renders bold-blue *on the pill* while inactive working glyphs render plain blue on `bg=default`. When severity is anything other than `working`, fg colour *and* weight *and* bg differentiate. No special-case in the format string — tmux's existing attribute inheritance handles it. See `docs/design/03-vocabulary.md` §6 "Active-window vs. severity colour collision".
+
+### 6.1 Glyph slot vocabulary
+
+Every tab opens with a single "what's running here" glyph slot. Two cases:
+
+| Condition | Glyph | Codepoint | Colour |
+|---|---|---|---|
+| `@os-agent` is set (live agent) | `#{@os-agent}` | varies (see §4 AGENT_GLYPHS) | `#{@os-agent-fg}` (severity-aware) |
+| `@os-agent` is unset (shell only) | nf-cod-terminal | U+EA85 | `theme.overlay0` |
+
+The shell-only case mirrors tokyo-night-tmux's leading boxed-terminal glyph. It anchors every tab visually (so empty windows still have a stable left edge) and signals "nothing demanding attention here" via the muted `overlay0` colour. When an agent appears, its severity-coloured identity glyph swaps in; when it exits, the shell glyph returns. Single slot, single meaning.
+
+### 6.2 Last-window-flag indicator
+
+The most-recently-visited window (the target of tmux's `prefix l` / `last-window` binding) carries a yellow trailing glyph: nf-md U+F08C0 in `theme.yellow`. Other tabs render only the standard trailing space. The marked tab is therefore 2 cells wider than its peers — acceptable because exactly one window holds the flag at a time.
 
 The `#{?@os-thm-base,#{@os-thm-base},default}` chain ensures the status line is readable on first paint before the server has written palette options.
 
