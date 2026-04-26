@@ -1,8 +1,7 @@
 import { describe, test, expect } from "bun:test";
-import { join } from "path";
-import { mkdirSync, rmSync, readFileSync } from "fs";
+import { rmSync } from "fs";
 import type { ClientCommand, ServerState } from "../src/shared";
-import { resolveTheme, BUILTIN_THEMES } from "../src/themes";
+import { resolveTheme } from "../src/themes";
 import { saveConfig, loadConfig } from "../src/config";
 
 describe("set-theme command", () => {
@@ -19,6 +18,7 @@ describe("set-theme command", () => {
       focusedSession: null,
       currentSession: null,
       theme: "dracula",
+      sidebarWidth: 26,
       ts: Date.now(),
     };
     expect(state.theme).toBe("dracula");

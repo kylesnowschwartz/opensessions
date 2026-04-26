@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { MuxRegistry } from "../src/mux/registry";
-import type { MuxProvider, MuxSessionInfo } from "../src/contracts/mux";
+import type { MuxProvider } from "../src/contracts/mux";
 
 function fakeMux(name: string): MuxProvider {
   return {
+    specificationVersion: "v1",
     name,
     listSessions: () => [],
     switchSession: () => {},
@@ -11,6 +12,8 @@ function fakeMux(name: string): MuxProvider {
     getSessionDir: () => "",
     getPaneCount: () => 1,
     getClientTty: () => "",
+    createSession: () => {},
+    killSession: () => {},
     setupHooks: () => {},
     cleanupHooks: () => {},
   };

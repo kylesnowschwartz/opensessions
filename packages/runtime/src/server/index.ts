@@ -1490,9 +1490,12 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       // Always returns 200 — hook failures must never block the agent.
       if (req.method === "POST" && url.pathname === "/hook") {
         try {
-          const body = await req.json();
-          for (const w of allWatchers) {
-            if (isHookReceiver(w)) w.handleHook(body);
+          const body = (await req.json()) as unknown;
+          if (body && typeof body === "object") {
+            const payload = body as import("../contracts/agent-watcher").HookPayload;
+            for (const w of allWatchers) {
+              if (isHookReceiver(w)) w.handleHook(payload);
+            }
           }
         } catch {}
         return new Response("ok", { status: 200 });
@@ -1715,7 +1718,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
         }
       }
 
-      if (server.upgrade(req, { data: {} })) return;
+      if (server.upgrade(req)) return;
       return new Response("opensessions server", { status: 200 });
     },
     websocket: {

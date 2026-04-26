@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { PluginLoader, type PluginAPI } from "../src/plugins/loader";
+import { PluginLoader } from "../src/plugins/loader";
 import type { MuxProvider } from "../src/contracts/mux";
 import type { AgentWatcher } from "../src/contracts/agent-watcher";
 import { join } from "path";
@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync, rmSync } from "fs";
 
 function fakeMux(name: string): MuxProvider {
   return {
+    specificationVersion: "v1",
     name,
     listSessions: () => [],
     switchSession: () => {},
@@ -185,7 +186,6 @@ describe("PluginLoader — factory loading from directory", () => {
   });
 
   test("PluginAPI shape matches expected contract", () => {
-    let receivedApi: PluginAPI | null = null;
     writeFileSync(
       join(pluginDir, "inspect.ts"),
       `export default function(api) {
