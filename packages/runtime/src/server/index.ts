@@ -124,128 +124,6 @@ function invalidateGitCache(dir?: string) {
   else gitInfoCache.clear();
 }
 
-// --- Port detection ---
-
-// Global port snapshot — refreshed by the port poll timer, read by computeState.
-// Runs lsof + ps once for ALL sessions instead of per-session.
-let portSnapshot = new Map<string, number[]>();
-
-function refreshPortSnapshot(sessionNames: string[]): boolean {
-  try {
-    // 1. Gather pane PIDs for all sessions in one tmux call per session
-    //    (tmux doesn't support multi-session list-panes, so we batch via a single format string)
-    const panePidsBySession = new Map<string, number[]>();
-    for (const name of sessionNames) {
-      const r = Bun.spawnSync(
-        ["tmux", "list-panes", "-s", "-t", name, "-F", "#{pane_pid}"],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const pids = r.stdout.toString().trim().split("\n").filter(Boolean).map(Number).filter((n) => !isNaN(n));
-      if (pids.length > 0) panePidsBySession.set(name, pids);
-    }
-
-    if (panePidsBySession.size === 0) {
-      portSnapshot = new Map();
-      return false;
-    }
-
-    // 2. Build parent→children map from a single ps call
-    const childrenOf = new Map<number, number[]>();
-    const psResult = Bun.spawnSync(["ps", "-eo", "pid=,ppid="], { stdout: "pipe", stderr: "pipe" });
-    for (const line of psResult.stdout.toString().trim().split("\n")) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 2) continue;
-      const pid = parseInt(parts[0], 10);
-      const ppid = parseInt(parts[1], 10);
-      if (isNaN(pid) || isNaN(ppid)) continue;
-      let arr = childrenOf.get(ppid);
-      if (!arr) { arr = []; childrenOf.set(ppid, arr); }
-      arr.push(pid);
-    }
-
-    // 3. BFS from pane PIDs to get full descendant tree per session
-    //    Also build a reverse map: pid → session name(s)
-    const pidToSessions = new Map<number, string[]>();
-    for (const [name, panePids] of panePidsBySession) {
-      const allPids = new Set<number>(panePids);
-      const queue = [...panePids];
-      while (queue.length > 0) {
-        const pid = queue.pop()!;
-        const kids = childrenOf.get(pid);
-        if (!kids) continue;
-        for (const kid of kids) {
-          if (!allPids.has(kid)) {
-            allPids.add(kid);
-            queue.push(kid);
-          }
-        }
-      }
-      for (const pid of allPids) {
-        let arr = pidToSessions.get(pid);
-        if (!arr) { arr = []; pidToSessions.set(pid, arr); }
-        arr.push(name);
-      }
-    }
-
-    // 4. Single lsof call for all listening TCP ports
-    const lsofResult = Bun.spawnSync(
-      ["/usr/sbin/lsof", "-iTCP", "-sTCP:LISTEN", "-nP", "-F", "pn"],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    if (lsofResult.exitCode !== 0) {
-      log("ports", "lsof failed", { exitCode: lsofResult.exitCode, stderr: lsofResult.stderr.toString().slice(0, 200) });
-      return false;
-    }
-
-    // 5. Parse and attribute ports to sessions
-    const sessionPorts = new Map<string, Set<number>>();
-    let currentPid = 0;
-    for (const line of lsofResult.stdout.toString().split("\n")) {
-      if (line.startsWith("p")) {
-        currentPid = parseInt(line.slice(1), 10);
-      } else if (line.startsWith("n")) {
-        const sessions = pidToSessions.get(currentPid);
-        if (!sessions) continue;
-        const match = line.match(/:(\d+)$/);
-        if (!match) continue;
-        const port = parseInt(match[1], 10);
-        if (isNaN(port)) continue;
-        for (const name of sessions) {
-          let set = sessionPorts.get(name);
-          if (!set) { set = new Set(); sessionPorts.set(name, set); }
-          set.add(port);
-        }
-      }
-    }
-
-    // 6. Build the new snapshot
-    const next = new Map<string, number[]>();
-    for (const name of sessionNames) {
-      const set = sessionPorts.get(name);
-      next.set(name, set ? [...set].sort((a, b) => a - b) : []);
-    }
-
-    const changed = !mapsEqual(portSnapshot, next);
-    portSnapshot = next;
-    return changed;
-  } catch (err) {
-    log("ports", "refreshPortSnapshot failed", { error: String(err) });
-    return false;
-  }
-}
-
-function mapsEqual(a: Map<string, number[]>, b: Map<string, number[]>): boolean {
-  if (a.size !== b.size) return false;
-  for (const [k, v] of a) {
-    const bv = b.get(k);
-    if (!bv || bv.length !== v.length || v.some((n, i) => n !== bv[i])) return false;
-  }
-  return true;
-}
-
-function getSessionPorts(sessionName: string): number[] {
-  return portSnapshot.get(sessionName) ?? [];
-}
 
 // --- Git HEAD file watchers ---
 
@@ -577,7 +455,6 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
         isWorktree: git.isWorktree,
         unseen: tracker.isUnseen(name),
         panes,
-        ports: getSessionPorts(name),
         windows,
         uptime,
         agentState: tracker.getState(name),
@@ -1499,29 +1376,10 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       }
     }
   }
-
-  // --- Port polling (detect new/stopped listeners every 10s) ---
-
-  const PORT_POLL_INTERVAL_MS = 10_000;
-  let portPollTimer: ReturnType<typeof setInterval> | null = null;
-
-  function startPortPoll() {
-    // Run initial snapshot immediately so first broadcast has ports
-    if (lastState) {
-      refreshPortSnapshot(lastState.sessions.map((s) => s.name));
-    }
-    portPollTimer = setInterval(() => {
-      if (!lastState || clientCount === 0) return;
-      const changed = refreshPortSnapshot(lastState.sessions.map((s) => s.name));
-      if (changed) broadcastState();
-    }, PORT_POLL_INTERVAL_MS);
-  }
-
   function cleanup() {
     for (const w of allWatchers) w.stop();
     if (watcherBroadcastTimer) clearTimeout(watcherBroadcastTimer);
     if (debounceTimer) clearTimeout(debounceTimer);
-    if (portPollTimer) clearInterval(portPollTimer);
     if (paneScanTimer) clearInterval(paneScanTimer);
     for (const timer of pendingHighlightResets.values()) clearTimeout(timer);
     pendingHighlightResets.clear();
@@ -1877,15 +1735,6 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     }
   }
 
-  // Seed port snapshot before first broadcast so clients see ports immediately
-  {
-    const allMuxSessions: string[] = [];
-    for (const p of allProviders) {
-      for (const s of p.listSessions()) allMuxSessions.push(s.name);
-    }
-    refreshPortSnapshot(allMuxSessions);
-  }
-
   // Floor configured width against content — widen if saved config is too narrow.
   // Runs immediately (with whatever data is available) and again after 2s once
   // watchers have detected agents, since agent names affect the minimum width.
@@ -1902,7 +1751,6 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
 
   broadcastState();
   floorWidthToContent();
-  startPortPoll();
   startPaneScan();
   // Run initial pane scan
   refreshPaneAgents();

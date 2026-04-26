@@ -32,7 +32,6 @@ That state is assembled from several sources:
 - custom session order stored on disk
 - Git branch and dirty information from each session directory
 - pane counts and window counts from providers
-- detected listening ports from descendant processes in tmux sessions
 - tracked agent instances and unseen state from `AgentTracker`
 
 The result is one merged view even when multiple mux providers are active.

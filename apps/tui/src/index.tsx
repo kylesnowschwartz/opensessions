@@ -412,7 +412,7 @@ function App() {
     let max = 0;
     for (const session of sessions) {
       let h = 1; // row 1: name
-      if (session.branch || (session.ports?.length ?? 0) > 0) h++; // row 2: branch/port
+      if (session.branch) h++; // row 2: branch
 
       // expanded content
       const { project, parent } = formatDir(session.dir);
@@ -420,9 +420,6 @@ function App() {
         h++;
         if (parent) h++;
       }
-
-      const ports = session.ports ?? [];
-      if (ports.length > 0) h += Math.ceil(ports.length / 3);
 
       const agents = session.agents ?? [];
       for (const _agent of agents) {
@@ -1560,13 +1557,6 @@ function SessionCard(props: SessionCardProps) {
     return b.length > 15 ? b.slice(0, 14) + "…" : b;
   };
 
-  const portHint = () => {
-    const ports = props.session.ports ?? [];
-    if (ports.length === 0) return "";
-    if (ports.length === 1) return `⌁${ports[0]}`;
-    return `⌁${ports[0]}+${ports.length - 1}`;
-  };
-
   const metaSummary = () => {
     const meta = props.session.metadata;
     if (!meta) return "";
@@ -1616,15 +1606,6 @@ function SessionCard(props: SessionCardProps) {
   // Note: status / progress / logs are now rendered in the standalone
   // ActivityZone component beneath the rolodex (per the canonical mockup).
   // The focused card body stays lean: name + branch + dir + agents only.
-  const portRows = () => {
-    const ports = props.session.ports ?? [];
-    const maxPerRow = 3;
-    const rows: number[][] = [];
-    for (let i = 0; i < ports.length; i += maxPerRow) {
-      rows.push(ports.slice(i, i + maxPerRow));
-    }
-    return rows;
-  };
   const progressText = () => {
     const p = meta()?.progress;
     if (!p) return "";
@@ -1665,25 +1646,13 @@ function SessionCard(props: SessionCardProps) {
             </Show>
           </box>
 
-          {/* Row 2: branch plus a compact local-port hint when available */}
-          <Show when={props.session.branch || portHint()}>
-            <box flexDirection="row">
-              <Show when={props.session.branch}>
-                <text truncate flexGrow={1}>
-                  <span style={{ fg: props.isFocused ? P().pink : (props.paneFocused() ? P().overlay0 : P().surface2) }}>
-                    {BRANCH_GLYPH}{" "}{truncBranch()}
-                  </span>
-                </text>
-              </Show>
-              <Show when={portHint()}>
-                <text flexShrink={0}>
-                  <span style={{ fg: props.isFocused ? P().sky : (props.paneFocused() ? P().overlay0 : P().surface2) }}>
-                    {props.session.branch ? " " : ""}
-                    {portHint()}
-                  </span>
-                </text>
-              </Show>
-            </box>
+          {/* Row 2: branch */}
+          <Show when={props.session.branch}>
+            <text truncate>
+              <span style={{ fg: props.isFocused ? P().pink : (props.paneFocused() ? P().overlay0 : P().surface2) }}>
+                {BRANCH_GLYPH}{" "}{truncBranch()}
+              </span>
+            </text>
           </Show>
 
           {/* Row 3: metadata summary (status + progress) — only when collapsed */}
@@ -1709,40 +1678,6 @@ function SessionCard(props: SessionCardProps) {
               </text>
             </Show>
           </Show>
-
-          {/* Ports — full clickable list */}
-          <Show when={props.session.ports?.length}>
-            <box flexDirection="column" flexShrink={0}>
-              <For each={portRows()}>
-                {(ports, rowIndex) => (
-                  <box flexDirection="row" paddingRight={1}>
-                    <text flexShrink={0}>
-                      <span style={{ fg: rowIndex() === 0 ? P().overlay0 : P().surface2, attributes: DIM }}>
-                        {rowIndex() === 0 ? "local " : "      "}
-                      </span>
-                    </text>
-                    <For each={ports}>
-                      {(port, portIndex) => (
-                        <box flexDirection="row" flexShrink={0}>
-                          <text onMouseDown={() => {
-                            Bun.spawn(["open", `http://localhost:${port}`], { stdout: "ignore", stderr: "ignore" });
-                          }}>
-                            <span style={{ fg: P().sky, attributes: BOLD }}>{String(port)}</span>
-                          </text>
-                          <Show when={portIndex() < ports.length - 1}>
-                            <text>
-                              <span style={{ fg: P().surface2 }}>{" · "}</span>
-                            </text>
-                          </Show>
-                        </box>
-                      )}
-                    </For>
-                  </box>
-                )}
-              </For>
-            </box>
-          </Show>
-
           {/* Agent instances */}
           <Show when={agents().length > 0}>
             <box flexDirection="column">

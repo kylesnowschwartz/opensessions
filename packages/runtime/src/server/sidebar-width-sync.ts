@@ -25,7 +25,7 @@ const THREAD_ID_COLS = 6;          // " #" + 4 chars (threadId.slice(-4))
  *
  * Collapsed card rows (all cards):
  *   Row 1 (name):   index(3) + name + badge + spacer + statusIcon(2) + pad(1)
- *   Row 2 (branch): index(3) + branch + portHint + pad(1)
+ *   Row 2 (branch): index(3) + branch + pad(1)
  *
  * Expanded agent row (focused card only, inside border):
  *   border(1) + expandPad(3) + agentPad(1) + icon+space(2) + agentName + statusLabel + dismiss(2) + pad(1) + border(1)
@@ -42,14 +42,11 @@ export function computeMinSidebarWidth(sessions: SessionData[]): number {
     const unseenCols = s.unseen ? 2 : 0; // " ●" when session has unseen agents
     const nameRow = PADDING_LEFT + nameLen + badge + unseenCols + STATUS_ICON_COLS + PADDING_RIGHT;
 
-    // Collapsed branch row (renders when branch OR ports are present)
-    const portHintLen = portHintWidth(s.ports ?? []);
+    // Collapsed branch row (renders when branch is present)
     const branchLen = s.branch ? Math.min(s.branch.length, BRANCH_TRUNC_LIMIT) : 0;
     let branchRow = 0;
-    if (branchLen || portHintLen) {
-      const branchIcon = branchLen ? BRANCH_ICON_COLS : 0;
-      const spacer = branchLen && portHintLen ? 1 : 0;
-      branchRow = PADDING_LEFT + branchIcon + branchLen + spacer + portHintLen + PADDING_RIGHT;
+    if (branchLen) {
+      branchRow = PADDING_LEFT + BRANCH_ICON_COLS + branchLen + PADDING_RIGHT;
     }
 
     widestContent = Math.max(widestContent, nameRow, branchRow);
@@ -77,14 +74,6 @@ function agentBadgeWidth(s: SessionData): number {
   if (count === 0) return 0;
   // " ●" = 2, " ●2" = 3, " ●10" = 4, etc.
   return count === 1 ? 2 : 1 + 1 + String(count).length;
-}
-
-function portHintWidth(ports: number[]): number {
-  if (ports.length === 0) return 0;
-  // "⌁3000" or "⌁3000+2"
-  const first = `⌁${ports[0]}`;
-  if (ports.length === 1) return first.length;
-  return `${first}+${ports.length - 1}`.length;
 }
 
 export function clampSidebarWidth(width: number, windowWidth?: number): number {

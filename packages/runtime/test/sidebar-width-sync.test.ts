@@ -67,7 +67,6 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
     isWorktree: false,
     unseen: false,
     panes: 1,
-    ports: [],
     windows: 1,
     uptime: "0s",
     agentState: null,
@@ -108,27 +107,6 @@ describe("computeMinSidebarWidth", () => {
     ])).toBe(18);
   });
 
-  test("branch + port hint widens the branch row", () => {
-    // branch "main" = 4, ports [3000] → "⌁3000" = 5
-    // branch row = 1 + 2 + 4 + 1 + 5 + 1 = 14, + border 2 = 16
-    expect(computeMinSidebarWidth([
-      makeSession({ name: "ab", branch: "main", ports: [3000] }),
-    ])).toBe(16);
-
-    // branch "feat/signup" = 11, ports [3000, 3001] → "⌁3000+1" = 7
-    // branch row = 1 + 2 + 11 + 1 + 7 + 1 = 23 + border 2 = 25
-    expect(computeMinSidebarWidth([
-      makeSession({ name: "ab", branch: "feat/signup", ports: [3000, 3001] }),
-    ])).toBe(25);
-  });
-
-  test("ports without branch still account for row 2", () => {
-    // ports [8080] → "⌁8080" = 5, no branch icon. branch row = 1 + 0 + 5 + 1 = 7 + border 2 = 9
-    // name "a" → name row = 1 + 1 + 2 + 1 = 5 + border 2 = 7. floor wins.
-    expect(computeMinSidebarWidth([
-      makeSession({ name: "a", branch: "", ports: [8080] }),
-    ])).toBe(ABSOLUTE_MIN_SIDEBAR_WIDTH);
-  });
 
   test("agent badge adds to name row", () => {
     // "opensessions" = 12, 2 alive agents → badge " ●2" = 3

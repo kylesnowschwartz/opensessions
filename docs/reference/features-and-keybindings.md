@@ -19,11 +19,8 @@ Each session row can show:
 The focused session detail panel can show:
 
 - Truncated working directory
-- Detected localhost ports
 - Agent instances in that session
 - Thread names when watchers provide them
-
-Clicking a detected port opens `http://localhost:<port>`.
 
 ## Agent Features
 
@@ -96,7 +93,6 @@ Clicking a detected port opens `http://localhost:<port>`.
 ## Refresh And Discovery Behavior
 
 - Git info is cached for 5 seconds.
-- Listening localhost ports are re-polled every 10 seconds while clients are connected.
 - Amp and Claude Code watchers poll every 2 seconds in addition to file watching.
 - OpenCode polls every 3 seconds.
 

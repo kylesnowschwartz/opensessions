@@ -108,7 +108,6 @@ function makeSession(opts: {
     isWorktree: false,
     unseen: opts.unseen ?? false,
     panes: 1,
-    ports: [],
     windows: 1,
     uptime: "1h",
     agentState,

@@ -42,7 +42,6 @@ function makeSession(name: string, agents: AgentEvent[]): SessionData {
     isWorktree: false,
     unseen: false,
     panes: agents.length,
-    ports: [],
     windows: 1,
     uptime: "",
     agentState: agents[0] ?? null,
