@@ -328,10 +328,15 @@ describe("AgentTracker", () => {
       ]);
       expect(tracker.getAgents("sess-1")[0]!.liveness).toBe("alive");
 
-      // Pane disappears — watcher entry should survive but transition to exited
-      const changed = tracker.applyPanePresence("sess-1", []);
+      // Pane disappears for one scan — held alive within hysteresis grace.
+      const firstChanged = tracker.applyPanePresence("sess-1", []);
+      expect(firstChanged).toBe(false);
+      expect(tracker.getAgents("sess-1")[0]!.liveness).toBe("alive");
 
-      expect(changed).toBe(true);
+      // Second consecutive miss → threshold crossed, transition to exited.
+      const secondChanged = tracker.applyPanePresence("sess-1", []);
+
+      expect(secondChanged).toBe(true);
       const agents = tracker.getAgents("sess-1");
       expect(agents.length).toBe(1);
       expect(agents[0]!.liveness).toBe("exited");
@@ -349,7 +354,11 @@ describe("AgentTracker", () => {
       expect(tracker.getAgents("sess-1").length).toBe(1);
       expect(tracker.getAgents("sess-1")[0]!.status).toBe("idle");
 
-      // Pane disappears — synthetic should be removed entirely, not left as zombie
+      // Pane disappears — first miss is held within hysteresis grace.
+      tracker.applyPanePresence("sess-1", []);
+      expect(tracker.getAgents("sess-1").length).toBe(1);
+
+      // Second consecutive miss → synthetic deleted.
       const changed = tracker.applyPanePresence("sess-1", []);
 
       expect(changed).toBe(true);
@@ -432,9 +441,10 @@ describe("AgentTracker", () => {
       const oldTs = Date.now() - 10 * 60 * 1000;
       tracker.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running", ts: oldTs }));
 
-      // Make alive then exited
+      // Make alive then exited (two consecutive empty scans cross hysteresis)
       tracker.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
-      tracker.applyPanePresence("sess-1", []); // exits
+      tracker.applyPanePresence("sess-1", []); // first miss — held alive
+      tracker.applyPanePresence("sess-1", []); // second miss — exits
 
       tracker.pruneStuck(3 * 60 * 1000);
 
@@ -555,6 +565,199 @@ describe("AgentTracker", () => {
       expect(agents[0]!.threadId).toBe("abc");
       expect(agents[0]!.paneId).toBe("%21");
       expect(agents[0]!.liveness).toBe("alive");
+    });
+  });
+
+  // Pane-presence hysteresis: a single missed scan must not transition an
+  // alive entry to exited. Bug source — process tree races during agent
+  // re-execs (Claude Code compaction, codex sandbox spawn). See blueprint
+  // §V1, ticket TMUX-HEADER-001.
+  describe("applyPanePresence — hysteresis (transient miss handling)", () => {
+    test("T1: single missed scan holds entry alive (under threshold)", () => {
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+      expect(t.getAgents("sess-1")[0]!.liveness).toBe("alive");
+
+      const changed = t.applyPanePresence("sess-1", []);
+
+      expect(changed).toBe(false);
+      const agent = t.getAgents("sess-1")[0]!;
+      expect(agent.liveness).toBe("alive");
+      expect(agent.paneId).toBe("%1");
+    });
+
+    test("T2: two consecutive misses cross threshold and transition to exited", () => {
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+
+      const first = t.applyPanePresence("sess-1", []);
+      expect(first).toBe(false);
+      expect(t.getAgents("sess-1")[0]!.liveness).toBe("alive");
+
+      const second = t.applyPanePresence("sess-1", []);
+      expect(second).toBe(true);
+      const agent = t.getAgents("sess-1")[0]!;
+      expect(agent.liveness).toBe("exited");
+      expect(agent.paneId).toBeUndefined();
+    });
+
+    test("T3: re-appearance during grace clears miss counter, no flicker", () => {
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+
+      // Simulate a long flap loop: alternate empty/present scans 5 times.
+      for (let i = 0; i < 5; i++) {
+        t.applyPanePresence("sess-1", []); // single miss — held alive
+        t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+        expect(t.getAgents("sess-1")[0]!.liveness).toBe("alive");
+      }
+    });
+
+    test("T4: pane move (same agent name, new paneId) does not count as a miss", () => {
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+      expect(t.getAgents("sess-1")[0]!.paneId).toBe("%1");
+
+      // Pane "moves" — agent name reappears on a different paneId.
+      const changed = t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%2" }]);
+      expect(changed).toBe(true); // paneId rebound
+      const agent = t.getAgents("sess-1")[0]!;
+      expect(agent.liveness).toBe("alive");
+      expect(agent.paneId).toBe("%2");
+
+      // And no exit transition is queued: a subsequent missing scan is treated
+      // as the FIRST miss of a new lifecycle, not the second.
+      expect(t.applyPanePresence("sess-1", [])).toBe(false);
+      expect(t.getAgents("sess-1")[0]!.liveness).toBe("alive");
+    });
+
+    test("T5: ended:true watcher event overrides hysteresis (immediate exit)", () => {
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+
+      // Pane disappears — single miss, would normally hold alive.
+      t.applyPanePresence("sess-1", []);
+      expect(t.getAgents("sess-1")[0]!.liveness).toBe("alive");
+
+      // Definitive exit signal arrives. Entry must be removed immediately.
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "done", ended: true }));
+      expect(t.getAgents("sess-1").length).toBe(0);
+    });
+
+    test("T6: multi-instance same agent — exiting instance accrues misses while survivor stays alive", () => {
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "thread-A", status: "running" }));
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "thread-B", status: "running" }));
+      t.applyPanePresence("sess-1", [
+        { agent: "claude-code", paneId: "%1" },
+        { agent: "claude-code", paneId: "%2" },
+      ]);
+      // Threads A and B may have rebound to either pane — capture the binding.
+      const initial = t.getAgents("sess-1");
+      const findByThread = (tid: string) => initial.find((a) => a.threadId === tid)!;
+      const aPane = findByThread("thread-A").paneId!;
+      const bPane = findByThread("thread-B").paneId!;
+      expect(new Set([aPane, bPane])).toEqual(new Set(["%1", "%2"]));
+
+      // Survivor is whichever pane is still in the next scan; the other instance
+      // is the one that exits. Pick the survivor by paneId.
+      const survivorPane = "%1";
+      const exitingPane = survivorPane === aPane ? bPane : aPane;
+      const survivorThread = aPane === survivorPane ? "thread-A" : "thread-B";
+      const exitingThread = survivorThread === "thread-A" ? "thread-B" : "thread-A";
+
+      // Scan 1 — only the survivor reports. The exiting instance's paneId
+      // (`%2`) is not in scan; the only pa (`%1`) is bound to the survivor's
+      // existing paneId, so there are zero spare panes for rebinding. The
+      // exiting instance must accrue a real miss (held alive within grace).
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: survivorPane }]);
+      const afterFirstMiss = t.getAgents("sess-1");
+      expect(afterFirstMiss.length).toBe(2);
+      expect(afterFirstMiss.find((a) => a.threadId === survivorThread)!.liveness).toBe("alive");
+      expect(afterFirstMiss.find((a) => a.threadId === survivorThread)!.paneId).toBe(survivorPane);
+      expect(afterFirstMiss.find((a) => a.threadId === exitingThread)!.liveness).toBe("alive");
+      // Exiting instance still holds its old paneId (within hysteresis grace).
+      expect(afterFirstMiss.find((a) => a.threadId === exitingThread)!.paneId).toBe(exitingPane);
+
+      // Scan 2 — same shape. Threshold (default 2) crosses — exiting instance
+      // transitions to exited. Survivor untouched.
+      const changed = t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: survivorPane }]);
+      expect(changed).toBe(true);
+      const afterSecondMiss = t.getAgents("sess-1");
+      expect(afterSecondMiss.find((a) => a.threadId === survivorThread)!.liveness).toBe("alive");
+      expect(afterSecondMiss.find((a) => a.threadId === survivorThread)!.paneId).toBe(survivorPane);
+      expect(afterSecondMiss.find((a) => a.threadId === exitingThread)!.liveness).toBe("exited");
+      expect(afterSecondMiss.find((a) => a.threadId === exitingThread)!.paneId).toBeUndefined();
+    });
+
+    test("T6b: multi-instance pane move — single survivor, single new paneId, no false miss", () => {
+      // Single instance whose pane moves %1 → %2 must be treated as a pane
+      // move, not a miss, even when the agent name index would otherwise
+      // double-count.
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+      const before = t.getAgents("sess-1")[0]!;
+      expect(before.paneId).toBe("%1");
+
+      // Pane moves: scan returns %2 only.
+      const changed = t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%2" }]);
+      expect(changed).toBe(true);
+      const after = t.getAgents("sess-1");
+      expect(after.length).toBe(1);
+      expect(after[0]!.liveness).toBe("alive");
+      expect(after[0]!.paneId).toBe("%2");
+    });
+
+    test("T7: configurable missThreshold preserves test determinism", () => {
+      const t = new AgentTracker({ missThreshold: 1 });
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+
+      // With threshold=1, single miss exits immediately (matches old behaviour).
+      const changed = t.applyPanePresence("sess-1", []);
+      expect(changed).toBe(true);
+      expect(t.getAgents("sess-1")[0]!.liveness).toBe("exited");
+    });
+
+    test("T8: seed ghost path unchanged (immediate exit on first scan)", () => {
+      const t = new AgentTracker();
+      // Seed entry: applied with seed=true, has no paneId, liveness undefined.
+      t.applyEvent(
+        event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "idle" }),
+        { seed: true },
+      );
+      // Liveness unset (seed never enriched by scanner)
+      expect(t.getAgents("sess-1")[0]!.liveness).toBeUndefined();
+
+      // Scanner runs, finds different panes (no claude-code) → seed ghost
+      // transitions to exited via step 3 (NOT step 1 / hysteresis).
+      const changed = t.applyPanePresence("sess-1", [{ agent: "pi", paneId: "%9" }]);
+      expect(changed).toBe(true);
+      const agent = t.getAgents("sess-1")[0]!;
+      expect(agent.liveness).toBe("exited");
+    });
+
+    test("miss state is cleared on dismiss()", () => {
+      const t = new AgentTracker();
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+      t.applyPanePresence("sess-1", []); // accrue one miss
+
+      t.dismiss("sess-1", "claude-code", "abc");
+      // Re-create the same instance and verify the counter is fresh.
+      t.applyEvent(event({ session: "sess-1", agent: "claude-code", threadId: "abc", status: "running" }));
+      t.applyPanePresence("sess-1", [{ agent: "claude-code", paneId: "%1" }]);
+
+      // First miss after re-create should still hold alive (counter starts at 0).
+      const changed = t.applyPanePresence("sess-1", []);
+      expect(changed).toBe(false);
+      expect(t.getAgents("sess-1")[0]!.liveness).toBe("alive");
     });
   });
 });

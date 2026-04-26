@@ -4,6 +4,13 @@ import { TERMINAL_STATUSES } from "../contracts/agent";
 const MAX_EVENT_TIMESTAMPS = 30;
 const TERMINAL_PRUNE_MS = 5 * 60 * 1000;
 
+// Pane scans (server/index.ts:1205) run every 3s. A single missed scan can
+// happen when the agent process re-execs (Claude Code compaction, codex
+// sandbox spawn) and the tree match transiently fails. Requiring N consecutive
+// misses before transitioning alive→exited absorbs the false negative without
+// noticeably delaying real exits.
+const DEFAULT_MISS_THRESHOLD = 2;
+
 const STATUS_PRIORITY: Record<string, number> = {
   running: 5,
   error: 4,
@@ -24,9 +31,24 @@ export class AgentTracker {
   // Per-instance unseen tracking: "session\0instanceKey"
   private unseenInstances = new Set<string>();
   private active = new Set<string>();
+  // Per-instance pane-scan miss counter, keyed "session\0instanceKey".
+  // An entry exists only while a previously-alive agent is missing from the
+  // current scan but hasn't yet crossed the threshold. Cleared on every rebind
+  // and on every delete path so it can't leak.
+  private paneMisses = new Map<string, number>();
+  private missThreshold: number;
+
+  constructor(opts: { missThreshold?: number } = {}) {
+    this.missThreshold = opts.missThreshold ?? DEFAULT_MISS_THRESHOLD;
+  }
 
   private unseenKey(session: string, key: string): string {
     return `${session}\0${key}`;
+  }
+
+  /** Single helper to keep miss-state cleanup co-located with every delete path. */
+  private clearMissState(session: string, key: string): void {
+    this.paneMisses.delete(this.unseenKey(session, key));
   }
 
   applyEvent(event: AgentEvent, options?: { seed?: boolean }): void {
@@ -40,6 +62,7 @@ export class AgentTracker {
       if (sessionInstances) {
         sessionInstances.delete(key);
         this.unseenInstances.delete(this.unseenKey(event.session, key));
+        this.clearMissState(event.session, key);
         if (sessionInstances.size === 0) {
           this.instances.delete(event.session);
         }
@@ -72,6 +95,7 @@ export class AgentTracker {
         }
         sessionInstances.delete(k);
         this.unseenInstances.delete(this.unseenKey(event.session, k));
+        this.clearMissState(event.session, k);
       }
     }
 
@@ -158,6 +182,7 @@ export class AgentTracker {
     if (!removed) return false;
 
     this.unseenInstances.delete(this.unseenKey(session, key));
+    this.clearMissState(session, key);
     if (sessionInstances.size === 0) {
       this.instances.delete(session);
     }
@@ -172,6 +197,7 @@ export class AgentTracker {
           if (event.liveness === "alive") continue;
           sessionInstances.delete(key);
           this.unseenInstances.delete(this.unseenKey(session, key));
+          this.clearMissState(session, key);
         }
       }
       if (sessionInstances.size === 0) {
@@ -191,6 +217,7 @@ export class AgentTracker {
         if (event.liveness !== "exited") continue; // Only prune when we know the pane is gone
         if (now - event.ts > TERMINAL_PRUNE_MS) {
           sessionInstances.delete(key);
+          this.clearMissState(session, key);
         }
       }
       if (sessionInstances.size === 0) {
@@ -245,26 +272,68 @@ export class AgentTracker {
    *  The scanner only reports {agent, paneId} — no threadId, status, or threadName.
    *  Watchers are the single source of truth for those fields.
    *
-   *  1. Entries with liveness "alive" whose paneId is missing from the scan → "exited"
-   *  2. Each pane agent: find existing entry for this agent → stamp paneId + liveness.
-   *     If none exists, create a minimal synthetic (status: "idle", liveness: "alive").
+   *  1. Entries with liveness "alive" whose paneId is missing from the scan are
+   *     held alive on a miss-counter. Only after `missThreshold` consecutive
+   *     missed scans do we transition them: synthetics get deleted, watcher
+   *     entries get liveness="exited". This absorbs the false-negative scans
+   *     that happen when an agent process re-execs (Claude Code compaction,
+   *     codex sandbox spawn).
+   *  2. Each pane agent: find existing entry for this agent → stamp paneId +
+   *     liveness, clear miss counter. If none exists, create a minimal
+   *     synthetic (status: "idle", liveness: "alive").
    *  Returns true if anything changed (caller uses this for broadcast decisions). */
   applyPanePresence(session: string, paneAgents: PanePresenceInput[]): boolean {
     let changed = false;
     let sessionInstances = this.instances.get(session);
 
-    // Index incoming pane IDs for fast lookup
+    // Index incoming pane IDs for fast lookup.
     const activePaneIds = new Set<string>();
     for (const pa of paneAgents) activePaneIds.add(pa.paneId);
 
+    // "Spare" panes per agent — panes in this scan whose paneId is NOT already
+    // bound to an alive tracker entry. These are the only panes available for
+    // pane-move rebinding in step 2. A missing-paneId entry can suppress its
+    // miss only if it can plausibly consume a spare. With one alive instance
+    // (T4 pane move) the new paneId is spare → suppress. With two instances
+    // and one survivor, every incoming pane is bound to a survivor's old
+    // paneId → spare count is zero → the exiting instance MUST accrue a miss.
+    const sparePanesByAgent = new Map<string, number>();
+    if (sessionInstances) {
+      const boundPaneIds = new Set<string>();
+      for (const ev of sessionInstances.values()) {
+        if (ev.liveness === "alive" && ev.paneId && activePaneIds.has(ev.paneId)) {
+          boundPaneIds.add(ev.paneId);
+        }
+      }
+      for (const pa of paneAgents) {
+        if (boundPaneIds.has(pa.paneId)) continue;
+        sparePanesByAgent.set(pa.agent, (sparePanesByAgent.get(pa.agent) ?? 0) + 1);
+      }
+    }
+
     // 1. Handle previously-alive entries whose pane disappeared
-    //    - Synthetics (pane-keyed, no watcher data): delete outright — they have no
-    //      meaningful state to preserve and become zombie indicators if left behind.
-    //    - Watcher-sourced entries: transition liveness to "exited" so the watcher
-    //      can still manage their status lifecycle.
     if (sessionInstances) {
       for (const [key, event] of sessionInstances) {
         if (event.liveness === "alive" && event.paneId && !activePaneIds.has(event.paneId)) {
+          // Pane move? Consume one spare same-agent pane if available — step 2
+          // will rebind us. With no spare, this entry truly missed.
+          const spare = sparePanesByAgent.get(event.agent) ?? 0;
+          if (spare > 0) {
+            sparePanesByAgent.set(event.agent, spare - 1);
+            this.clearMissState(session, key);
+            continue;
+          }
+          // Bona fide miss — bump the counter.
+          const ukey = this.unseenKey(session, key);
+          const misses = (this.paneMisses.get(ukey) ?? 0) + 1;
+          if (misses < this.missThreshold) {
+            // Within grace — hold alive, do nothing visible. Counter persists
+            // until next scan resolves the question.
+            this.paneMisses.set(ukey, misses);
+            continue;
+          }
+          // Threshold crossed — transition for real.
+          this.paneMisses.delete(ukey);
           if (key.includes(":pane:")) {
             // Synthetic — remove entirely
             sessionInstances.delete(key);
@@ -312,6 +381,8 @@ export class AgentTracker {
         const wasDifferent = bestEvent.paneId !== pa.paneId || bestEvent.liveness !== "alive";
         bestEvent.paneId = pa.paneId;
         bestEvent.liveness = "alive";
+        // Resolved — any pending miss for this entry is no longer relevant.
+        this.clearMissState(session, bestKey);
         if (wasDifferent) changed = true;
 
         continue;
@@ -335,6 +406,7 @@ export class AgentTracker {
         const wasDifferent = existing.paneId !== pa.paneId || existing.liveness !== "alive";
         existing.paneId = pa.paneId;
         existing.liveness = "alive";
+        this.clearMissState(session, syntheticKey);
         if (wasDifferent) changed = true;
       }
     }
