@@ -34,3 +34,23 @@ log:
 [group('dev')]
 install-clawd:
     "{{root}}/scripts/install-clawd-font.sh"
+
+# Search Nerd Font glyph names (regex, case-insensitive)
+[group('glyph')]
+glyph-search PATTERN *ARGS:
+    @"{{bun}}" run "{{root}}/scripts/glyph/glyph.ts" search "{{PATTERN}}" {{ARGS}}
+
+# Reverse-lookup a Nerd Font codepoint (hex) -> name
+[group('glyph')]
+glyph-lookup HEX:
+    @"{{bun}}" run "{{root}}/scripts/glyph/glyph.ts" lookup "{{HEX}}"
+
+# Rasterise glyphs (codepoints or names) side-by-side to /tmp/glyph-render.png
+[group('glyph')]
+glyph-render +IDS:
+    @"{{bun}}" run "{{root}}/scripts/glyph/glyph.ts" render {{IDS}}
+
+# Print the vendored glyphnames.json METADATA (Nerd Fonts version pin)
+[group('glyph')]
+glyph-version:
+    @"{{bun}}" run "{{root}}/scripts/glyph/glyph.ts" version
