@@ -4,8 +4,9 @@
  * Source of truth: docs/design/03-vocabulary.md §10 codepoint cheat-sheet.
  *
  * All glyphs are single column-cell wide. Material Design Icons (`nf-md-*`)
- * are the default family; exceptions are Powerline branch, brand
- * letterforms (π/▲/♦), the vendored Clawd glyph, and brail spinners.
+ * are the default family; exceptions are brand letterforms (π/▲/♦),
+ * the vendored Clawd glyph, and brail spinners. (The branch glyph used to
+ * be Powerline U+E0A0; it now resolves into the MD family as well.)
  *
  * This module is consumed by render code; never compose glyphs ad-hoc in
  * components — import them from here so the design stays auditable.
@@ -79,15 +80,12 @@ export function agentCode(agent: string): string {
 
 // ── Structural & branding glyphs ──
 export const BRAND_CLAWD = ID_CLAUDE_CODE;   // header product mark
-export const BRANCH_GLYPH = "\u{E0A0}";      // Powerline branch
+export const BRANCH_GLYPH = "\u{F062C}";     // nf-md-source-branch
 export const FOLDER_GLYPH = "\u{F0770}";     // nf-md-folder-outline
 export const ACTIVITY_LEAD = "\u{F0142}";    // nf-md-chevron-right
 export const ACTIVITY_HEAD = "\u{F0054}";    // nf-md-arrow-right (heading separator)
 export const WRAP_UP = "\u{F0143}";          // nf-md-chevron-up (rolodex top)
 export const WRAP_DOWN = "\u{F0140}";        // nf-md-chevron-down (rolodex bottom)
-
-/** The current-session left bar. */
-export const CURRENT_BAR = "\u{258E}";       // ▎ (left one quarter block)
 
 /** Box-drawing for the focused-card border.
  *  OpenTUI's `border` prop owns the actual rendering; these are exported
