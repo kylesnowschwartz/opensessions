@@ -272,8 +272,10 @@ surfaced.
    `03-vocabulary.md` §2 / §3).
 2. **Status gutter.** Resolved as **two gutters per row** — left for
    severity, right for identity. (`02-zones.md` §3.)
-3. **Branch glyph.** Resolved as Powerline branch glyph `\u{E0A0}` (Tier 4
-   muted leader on the branch row inside the focused card only).
+3. **Branch glyph.** Resolved as MD `source-branch` `\u{F062C}` (Tier 4
+   muted leader on the branch row inside the focused card only). Earlier
+   resolution used Powerline `\u{E0A0}`; superseded for icon-family
+   coherence — see `00-grounding.md` §"Principles we'll borrow" #1.
 4. **Port glyph.** Initially resolved as nf-md server-network `\u{F048D}`,
    but **subsequently the entire ports feature was removed** during the
    Codex review pass (the user reported never having noticed ports in

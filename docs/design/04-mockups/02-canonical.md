@@ -140,7 +140,7 @@ events:
 │                                      │
 │  ╭────────────────────────────────╮  │
 │  │ ▎opensessions               4 │  │
-│  │   main                          │  │   ← branch row (Tier 4 muted, Powerline branch)
+│  │   main                          │  │   ← branch row (Tier 4 muted, MD source-branch)
 │  │ ▎ pi  15c8                 π  │  │
 │  │ ▎ pi  10bc               󰗡 π  │  │
 │  │ ▎ claude-code            󰗡   │  │

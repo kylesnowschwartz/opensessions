@@ -233,7 +233,7 @@ or agent name itself**:
 | Use | Glyph | Codepoint | Family | Colour |
 |---|---|---|---|---|
 | Header product mark |  Clawd | `\u{100CC0}` | vendored | Tier 1 (bold) when pane focused; Tier 2 unfocused |
-| Branch row leader |  branch | `\u{E0A0}` | Powerline | Tier 4 (muted) |
+| Branch row leader |  source-branch | `\u{F062C}` | nf-md | Tier 4 (muted) |
 | Working-dir row leader |  folder-outline | `\u{F0770}` | nf-md | Tier 4 (muted) |
 | Activity zone leader |  chevron-right | `\u{F0142}` | nf-md | Tier 4 (muted) |
 | Activity zone heading separator |  arrow-right | `\u{F0054}` | nf-md | Tier 4 (muted) — used between session name and the entries (`opensessions 䍡`) |

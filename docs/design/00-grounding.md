@@ -97,9 +97,12 @@ The resolved style stance lives at the bottom (§7).
   language, ~7000 icons. We anchor on this family as the *default*; anything
   outside it has to earn its presence.
 - **Powerline conventions** — the original "segmented bar" idiom. We
-  cherry-pick the iconic glyphs (the branch glyph `\uE0A0` is universal
-  terminal vocabulary for git) without adopting the segment-arrow chrome
-  (`\uE0B0`-style triangles), which fails Tufte's 1+1=3 rule.
+  reject the segment-arrow chrome (`\uE0B0`-style triangles), which fails
+  Tufte's 1+1=3 rule. Earlier opensessions designs cherry-picked the
+  Powerline branch glyph (`\uE0A0`) for the branch row leader; the
+  canonical design has since moved that to MD `source-branch`
+  (`\uF062C`) for icon-family coherence — one fewer exception to the
+  Material-Design-by-default rule.
 - **`tail-claude-hud`** (sibling project) — already operates a curated
   Nerd-Font icon system with a 4-tier text hierarchy. Concrete prior art for
   per-tool-category icons (pen-nib for edit, wrench for bash, magnifying
@@ -113,9 +116,7 @@ The resolved style stance lives at the bottom (§7).
 ### Principles we'll borrow
 
 1. **One family is the default; exceptions earn their place.**
-   Material Design Icons are the anchor. The four exceptions are:
-   - **Powerline branch glyph (`\uE0A0`)** — universal terminal vocabulary,
-     irreplaceable.
+   Material Design Icons are the anchor. The three exceptions are:
    - **Brand letterforms** (`π` for pi, `▲` for codex, `♦` for amp) —
      iconic *because* they aren't part of an icon family. They are marks.
    - **Vendored custom glyphs** (Clawd `\u{100CC0}`) — when an agent has its
@@ -226,7 +227,7 @@ Operationalised:
 | Tufte: layering | Four text tiers (Primary / Secondary / Dim / Muted) carry hierarchy; subordinate facts recede via *attribute and value*, not via removal or extra rows. |
 | Charm: warmth | Keep one warm accent (the existing pink/mauve for the focused-branch glyph; teal for unseen). Do not flatten the palette to monochrome in the name of austerity. |
 | Earned chrome | A border around the focused card *does* earn its keep — it tells the eye where the rolodex pin is. A border around every collapsed card does *not* — same job done by indent + weight. |
-| Iconography: family-anchored | Material Design Icons are the default family. Powerline branch (`\uE0A0`), brand letterforms (`π ▲ ♦`), vendored glyphs (Clawd `\u{100CC0}`), and animated brail spinners are the four exceptions. Anything else is a violation. |
+| Iconography: family-anchored | Material Design Icons are the default family. Brand letterforms (`π ▲ ♦`), vendored glyphs (Clawd `\u{100CC0}`), and animated brail spinners are the three exceptions. Anything else is a violation. (The branch glyph was previously a fourth exception via Powerline `\uE0A0`; it has since been moved into the MD family as `source-branch \uF062C`.) |
 | Iconography: Clawd in three positions | Header (brand mark), tmux statusline (window-presence), panel right gutter (per-agent identity). Same glyph; meaning is given by position. |
 
 This stance is the standing rule. When a later decision is contested, the

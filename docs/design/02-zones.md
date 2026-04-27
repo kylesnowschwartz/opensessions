@@ -145,7 +145,7 @@ inherits the same two-gutter grammar:
 
 - The session line at the top is the same row that appears collapsed.
 - The card optionally adds **one branch row** beneath, prefixed by the
-  Powerline branch glyph `\u{E0A0}` (Tier 4 muted). The branch row only
+  MD source-branch glyph `\u{F062C}` (Tier 4 muted). The branch row only
   appears when the session has a branch — sessions outside a git repo
   drop the row entirely.
 - **Ports row removed.** The `ports` feature is being deleted in this
@@ -331,6 +331,6 @@ zones tell us what we need glyphs for:
 
 That's it. No glyph for unseen (use teal name highlight, color-only —
 see `03-vocabulary.md` §4 "Unseen state"). The branch row inside the
-focused card uses a Tier 4 muted Powerline-branch leader (`\u{E0A0}`).
+focused card uses a Tier 4 muted MD source-branch leader (`\u{F062C}`).
 Ports were retired entirely (feature removal); see `03-vocabulary.md`
 §8.
