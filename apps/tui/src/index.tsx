@@ -1614,17 +1614,19 @@ function SessionCard(props: SessionCardProps) {
     return "";
   };
 
-  const currentIndicator = () => props.isCurrent ? "▎" : " ";
-  const currentBarColor = () => props.paneFocused() ? P().blue : P().overlay0;
+  // ▎ current-session left bar retired in render: bold name + row position
+  // already signal current state. Design docs (docs/design/03-vocabulary.md,
+  // /01-audit.md, /04-mockups/02-canonical.md) still reference the bar; that
+  // drift is intentional pending a follow-up doc update.
 
   return (
     <box id={`session-${props.session.name}`} flexDirection="column" flexShrink={0}>
       <box
         flexDirection="row"
         backgroundColor={bgColor()}
+        paddingLeft={1}
         onMouseDown={props.onSelect}
       >
-        <text flexShrink={0}><span style={{ fg: currentBarColor() }}>{currentIndicator()}</span></text>
         {/* Content */}
         <box flexDirection="column" flexGrow={1} paddingRight={1}>
           {/* Row 1: name + agent badge (left) + status icons (right) */}
