@@ -1641,7 +1641,10 @@ function SessionCard(props: SessionCardProps) {
             </text>
             <box flexGrow={1} />
             {/* Unseen marker is now color-only on the name (see nameColor()). */}
-            <Show when={statusIcon()}>
+            {/* Row-level statusIcon shown only on collapsed cards — the focused
+                card's agent rows below already render per-agent severity, so a
+                second spinner/icon at the session row is redundant. */}
+            <Show when={statusIcon() && !props.isFocused}>
               <text flexShrink={0}>
                 <span style={{ fg: statusColor() }}>{" "}{statusIcon()}</span>
               </text>
