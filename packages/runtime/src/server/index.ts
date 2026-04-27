@@ -10,7 +10,7 @@ import { AgentTracker } from "../agents/tracker";
 import { SessionOrder } from "./session-order";
 import { SessionMetadataStore } from "./metadata-store";
 import { loadConfig, saveConfig } from "../config";
-import { resolveTheme } from "../themes";
+import { resolveTheme, loadExternalTheme, type PartialTheme } from "../themes";
 import { syncTmuxHeaderOptions } from "./tmux-header-sync";
 import {
   clampSidebarWidth,
@@ -191,6 +191,14 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   // Load initial theme from config
   const config = loadConfig();
   let currentTheme: string | undefined = typeof config.theme === "string" ? config.theme : undefined;
+
+  // External theme override (typically written by the-themer's opensessions adapter).
+  // When present, takes precedence over `currentTheme` from config.json. The watcher
+  // re-reads on filesystem change and triggers a broadcast so the panel + tmux header
+  // repaint within a frame of the user swapping their terminal theme.
+  const externalThemePath = join(homedir(), ".config", "opensessions", "active-theme.json");
+  let externalTheme: PartialTheme | null = null;
+  let externalThemeWatcher: FSWatcher | null = null;
   let configuredWidth = clampSidebarWidth(config.sidebarWidth ?? 26);
   let sidebarPosition: "left" | "right" = config.sidebarPosition ?? "left";
   let sidebarVisible = false;
@@ -207,6 +215,61 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     sidebarWidth: configuredWidth, sidebarPosition, scriptsDir,
     theme: currentTheme, configKeys: Object.keys(config),
   });
+
+  // --- External theme loader + watcher ---
+  function reloadExternalTheme(reason: string): boolean {
+    let next: PartialTheme | null = null;
+    if (existsSync(externalThemePath)) {
+      try {
+        const text = readFileSync(externalThemePath, "utf-8");
+        next = loadExternalTheme(text);
+        if (!next) {
+          log("server", "external theme rejected", { path: externalThemePath, reason });
+        }
+      } catch (err) {
+        log("server", "external theme read failed", { error: String(err), reason });
+        next = null;
+      }
+    }
+    const changed = JSON.stringify(externalTheme) !== JSON.stringify(next);
+    externalTheme = next;
+    if (changed) {
+      log("server", "external theme applied", {
+        reason,
+        name: next?.name ?? null,
+        variant: next?.variant ?? null,
+        paletteTokens: next?.palette ? Object.keys(next.palette).length : 0,
+      });
+    }
+    return changed;
+  }
+
+  reloadExternalTheme("startup");
+
+  // Watch the directory rather than the file so atomic writes (rename trick used
+  // by most editors and `the-themer`'s symlink-then-replace flow) still trigger.
+  try {
+    const watchDir = join(homedir(), ".config", "opensessions");
+    if (existsSync(watchDir)) {
+      externalThemeWatcher = watch(watchDir, (_event, filename) => {
+        if (filename !== "active-theme.json") return;
+        if (reloadExternalTheme("file-change")) broadcastState();
+      });
+    }
+  } catch (err) {
+    log("server", "external theme watch failed", { error: String(err) });
+  }
+
+  /** Resolve the theme value passed to broadcasts. External theme wins; falls back
+   *  to the configured builtin name. */
+  function effectiveThemeConfig(): string | PartialTheme | undefined {
+    return externalTheme ?? currentTheme;
+  }
+
+  /** Resolve the human-readable theme name sent to clients (state.theme). */
+  function effectiveThemeName(): string | undefined {
+    return externalTheme?.name ?? currentTheme;
+  }
 
   // Read @opensessions-header gate once. Toggling at runtime requires a server
   // restart — same cost shape as other @opensessions-* options read at TPM init.
@@ -472,7 +535,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
       focusedSession = sessions.find((s) => s.name === currentSession)?.name ?? sessions[0]!.name;
     }
 
-    return { type: "state", sessions, focusedSession, currentSession, theme: currentTheme, sidebarWidth: configuredWidth, ts: Date.now() };
+    return { type: "state", sessions, focusedSession, currentSession, theme: effectiveThemeName(), sidebarWidth: configuredWidth, ts: Date.now() };
   }
 
   let broadcastPending = false;
@@ -495,8 +558,8 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     syncTmuxHeaderOptions(
       {
         sessions: lastState.sessions,
-        theme: resolveTheme(currentTheme),
-        themeName: currentTheme,
+        theme: resolveTheme(effectiveThemeConfig()),
+        themeName: effectiveThemeName(),
         enabled: headerEnabled,
       },
       { shellTmux: tmuxHeaderShell, log: tmuxHeaderLog },
@@ -1386,6 +1449,10 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     for (const watcher of gitHeadWatchers.values()) watcher.close();
     gitHeadWatchers.clear();
     if (idleTimer) clearTimeout(idleTimer);
+    if (externalThemeWatcher) {
+      try { externalThemeWatcher.close(); } catch {}
+      externalThemeWatcher = null;
+    }
     try { unlinkSync(PID_FILE); } catch {}
     for (const p of allProviders) p.cleanupHooks();
   }

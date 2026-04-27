@@ -360,8 +360,15 @@ export const BUILTIN_THEMES: Record<string, Theme> = {
 
 export const DEFAULT_THEME = "catppuccin-mocha";
 
-/** Partial theme for user overrides — any field can be omitted */
+/** Partial theme for user overrides — any field can be omitted.
+ *  When `name` is set (e.g. by the-themer's opensessions adapter), the server
+ *  uses it as the human-readable label propagated to clients; the resolved
+ *  palette merges over the default builtin. */
 export type PartialTheme = {
+  /** Optional label; populated by external sources like the-themer. */
+  name?: string;
+  /** Optional variant hint ("light" | "dark"). Informational only. */
+  variant?: "light" | "dark";
   palette?: Partial<ThemePalette>;
   status?: Partial<Record<AgentStatus, string>>;
   icons?: Partial<Record<AgentStatus, string>>;
@@ -386,4 +393,82 @@ export function resolveTheme(themeConfig: string | PartialTheme | undefined): Th
     status: { ...base.status, ...themeConfig.status },
     icons: { ...base.icons, ...themeConfig.icons },
   };
+}
+
+/**
+ * Load a theme from an external JSON file (typically written by the-themer's
+ * opensessions adapter). Returns a `PartialTheme` on success, or `null` on
+ * any failure — missing file, invalid JSON, or schema rejection.
+ *
+ * Path defaults to `~/.config/opensessions/active-theme.json`. The function
+ * never throws so the server's startup path stays unconditional.
+ *
+ * Schema (all fields optional, but `palette.*` should be valid colour
+ * strings to be useful):
+ * ```json
+ * {
+ *   "name": "dayfox",
+ *   "variant": "light",
+ *   "palette": { "text": "#3d2b5a", "blue": "#2848a9", ... }
+ * }
+ * ```
+ *
+ * Note: this loader is permissive on purpose. Unknown top-level keys are
+ * ignored. Unknown palette tokens are ignored. Missing palette tokens fall
+ * back to the default theme via `resolveTheme()`'s merge step — so a partial
+ * adapter (only writing `text`, `blue`, etc.) still produces a usable theme.
+ */
+export function loadExternalTheme(jsonText: string): PartialTheme | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+
+  const result: PartialTheme = {};
+
+  if (typeof obj.name === "string") result.name = obj.name;
+  if (obj.variant === "light" || obj.variant === "dark") result.variant = obj.variant;
+
+  if (obj.palette && typeof obj.palette === "object" && !Array.isArray(obj.palette)) {
+    const palette: Partial<ThemePalette> = {};
+    const knownTokens: ReadonlyArray<keyof ThemePalette> = [
+      "blue", "lavender", "pink", "mauve",
+      "yellow", "green", "red", "peach",
+      "teal", "sky",
+      "text", "subtext0", "subtext1",
+      "overlay0", "overlay1",
+      "surface0", "surface1", "surface2",
+      "base", "mantle", "crust",
+    ];
+    const src = obj.palette as Record<string, unknown>;
+    for (const token of knownTokens) {
+      const value = src[token];
+      if (typeof value === "string" && value.length > 0) {
+        palette[token] = value;
+      }
+    }
+    if (Object.keys(palette).length > 0) result.palette = palette;
+  }
+
+  // status and icons are accepted for forward-compat but currently unused
+  // by the panel/header. Pass through verbatim if present and well-formed.
+  if (obj.status && typeof obj.status === "object" && !Array.isArray(obj.status)) {
+    result.status = obj.status as PartialTheme["status"];
+  }
+  if (obj.icons && typeof obj.icons === "object" && !Array.isArray(obj.icons)) {
+    result.icons = obj.icons as PartialTheme["icons"];
+  }
+
+  // Reject if the result is empty (no recognisable fields). Forces the caller
+  // to fall back to the configured builtin theme rather than render with a
+  // no-op override that masks the configuration.
+  if (!result.name && !result.variant && !result.palette && !result.status && !result.icons) {
+    return null;
+  }
+
+  return result;
 }
